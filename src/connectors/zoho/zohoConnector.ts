@@ -6,6 +6,7 @@ import type {
   SyncResult,
 } from "../base/types";
 import type { InternalEntity } from "../../ontology/entities";
+import { FileZohoTokenStore, getZohoOAuthConfigFromEnv } from "./auth";
 import { mapZohoRecordToInternal } from "./mapper";
 import { ZohoClient, type ZohoClientConfig, type ZohoRecord } from "./client";
 
@@ -19,7 +20,13 @@ export class ZohoConnector implements BaseConnector<ZohoRecord> {
   private readonly client: ZohoClient;
 
   constructor(config: ZohoConnectorConfig = {}) {
-    this.client = config.client ?? new ZohoClient(config.clientConfig);
+    this.client =
+      config.client ??
+      new ZohoClient({
+        oauthConfig: getZohoOAuthConfigFromEnv(),
+        tokenStore: new FileZohoTokenStore(),
+        ...config.clientConfig,
+      });
   }
 
   async connect(): Promise<ConnectorConnection> {

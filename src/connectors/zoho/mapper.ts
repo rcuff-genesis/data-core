@@ -9,6 +9,7 @@ export function mapZohoRecordToInternal(record: ZohoRecord): InternalEntity[] {
   const source = "zoho";
   const sourceId = record.id;
   const modifiedAt = record.modifiedTime;
+  const createdAt = stringify(record.fields.Created_Time);
   const combinedLeadName = [
     stringify(record.fields.First_Name),
     stringify(record.fields.Last_Name),
@@ -30,9 +31,9 @@ export function mapZohoRecordToInternal(record: ZohoRecord): InternalEntity[] {
             "Unknown Lead",
           email: stringify(record.fields.Email),
           phone: stringify(record.fields.Phone),
-          companyId: referenceId("accounts", record.fields.Company),
           ownerId: referenceId("users", record.fields.Owner),
           status: stringify(record.fields.Lead_Status),
+          createdAt,
           updatedAt: modifiedAt,
         },
       ];
@@ -47,6 +48,7 @@ export function mapZohoRecordToInternal(record: ZohoRecord): InternalEntity[] {
           domain: stringify(record.fields.Website),
           industry: stringify(record.fields.Industry),
           ownerId: referenceId("users", record.fields.Owner),
+          createdAt,
           updatedAt: modifiedAt,
         },
       ];
@@ -59,28 +61,28 @@ export function mapZohoRecordToInternal(record: ZohoRecord): InternalEntity[] {
           sourceId,
           name: stringify(record.fields.Deal_Name) ?? "Untitled Deal",
           companyId: referenceId("accounts", record.fields.Account_Name),
-          leadId: referenceId("leads", record.fields.Contact_Name),
           stage: stringify(record.fields.Stage),
           amount: numberValue(record.fields.Amount),
           currency: stringify(record.fields.Currency),
           closeDate: stringify(record.fields.Closing_Date),
+          createdAt,
           updatedAt: modifiedAt,
         },
       ];
     case "activities":
+    case "tasks":
+    case "calls":
+    case "meetings":
       return [
         {
           id: buildEntityId(record.module, sourceId),
           type: "activity",
           source,
           sourceId,
-          subject: stringify(record.fields.Subject) ?? "Untitled Activity",
-          activityType: classifyActivityType(record.fields.Type),
-          occurredAt: stringify(record.fields.Activity_Date_Time),
-          leadId: referenceId("leads", record.fields.Who_Id),
-          companyId: referenceId("accounts", record.fields.What_Id),
-          dealId: referenceId("deals", record.fields.Deal_Name),
-          actorId: referenceId("users", record.fields.Owner),
+          subject: resolveActivitySubject(record) ?? "Untitled Activity",
+          activityType: classifyActivityType(record),
+          occurredAt: resolveActivityTime(record),
+          createdAt,
           updatedAt: modifiedAt,
         },
       ];
@@ -97,6 +99,7 @@ export function mapZohoRecordToInternal(record: ZohoRecord): InternalEntity[] {
           summary: stringify(record.fields.Description),
           textPreview: stringify(record.fields.Snippet),
           ownerId: referenceId("users", record.fields.Owner),
+          createdAt,
           updatedAt: modifiedAt,
         },
       ];
@@ -134,9 +137,23 @@ function referenceId(module: string, value: unknown): string | undefined {
 }
 
 function classifyActivityType(
-  value: unknown,
+  record: ZohoRecord,
 ): "call" | "email" | "meeting" | "note" | "task" | "unknown" {
-  const normalized = stringify(value)?.toLowerCase();
+  const moduleName = record.module.toLowerCase();
+
+  if (moduleName === "calls") {
+    return "call";
+  }
+
+  if (moduleName === "meetings") {
+    return "meeting";
+  }
+
+  if (moduleName === "tasks") {
+    return "task";
+  }
+
+  const normalized = stringify(record.fields.Type)?.toLowerCase();
 
   switch (normalized) {
     case "call":
@@ -152,4 +169,21 @@ function classifyActivityType(
     default:
       return "unknown";
   }
+}
+
+function resolveActivitySubject(record: ZohoRecord): string | undefined {
+  return (
+    stringify(record.fields.Subject) ||
+    stringify(record.fields.Call_Type)
+  );
+}
+
+function resolveActivityTime(record: ZohoRecord): string | undefined {
+  return (
+    stringify(record.fields.Activity_Date_Time) ||
+    stringify(record.fields.Start_DateTime) ||
+    stringify(record.fields.Call_Start_Time) ||
+    stringify(record.fields.Due_Date) ||
+    stringify(record.fields.Created_Time)
+  );
 }
