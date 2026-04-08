@@ -38,4 +38,8 @@ export interface SyncResult {
   entities: InternalEntity[];
   nextCheckpoint?: SyncCheckpoint;
   warnings: string[];
+  syncRunId?: number;
+  sourceRecordsPersisted?: number;
+  entitiesPersisted?: number;
+  relationsPersisted?: number;
 }

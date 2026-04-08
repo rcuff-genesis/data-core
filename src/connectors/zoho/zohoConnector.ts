@@ -6,6 +6,7 @@ import type {
   SyncResult,
 } from "../base/types";
 import type { InternalEntity } from "../../ontology/entities";
+import type { SourceRecordSnapshot } from "../../storage/types";
 import { FileZohoTokenStore, getZohoOAuthConfigFromEnv } from "./auth";
 import { mapZohoRecordToInternal } from "./mapper";
 import { ZohoClient, type ZohoClientConfig, type ZohoRecord } from "./client";
@@ -18,6 +19,7 @@ export interface ZohoConnectorConfig {
 export class ZohoConnector implements BaseConnector<ZohoRecord> {
   readonly name = "zoho" as const;
   private readonly client: ZohoClient;
+  private lastSourceRecords: SourceRecordSnapshot[] = [];
 
   constructor(config: ZohoConnectorConfig = {}) {
     this.client =
@@ -49,18 +51,29 @@ export class ZohoConnector implements BaseConnector<ZohoRecord> {
 
   async syncFull(): Promise<SyncResult> {
     const records = await this.client.fetchFullDataset();
-    return this.buildSyncResult("full", records);
+    return this.buildSyncResult("full", records, undefined, this.client.consumeWarnings());
   }
 
   async syncIncremental(checkpoint?: SyncCheckpoint): Promise<SyncResult> {
     const records = await this.client.fetchIncrementalDataset(
       checkpoint?.cursor?.value,
     );
-    return this.buildSyncResult("incremental", records, checkpoint);
+    return this.buildSyncResult(
+      "incremental",
+      records,
+      checkpoint,
+      this.client.consumeWarnings(),
+    );
   }
 
   mapToInternal(record: ZohoRecord): InternalEntity[] {
     return mapZohoRecordToInternal(record);
+  }
+
+  consumeLastSourceRecords(): SourceRecordSnapshot[] {
+    const sourceRecords = [...this.lastSourceRecords];
+    this.lastSourceRecords = [];
+    return sourceRecords;
   }
 
   async runSync(request: SyncRequest): Promise<SyncResult> {
@@ -93,9 +106,17 @@ export class ZohoConnector implements BaseConnector<ZohoRecord> {
     mode: "full" | "incremental",
     records: ZohoRecord[],
     checkpoint?: SyncCheckpoint,
+    warnings: string[] = [],
   ): SyncResult {
     const startedAt = new Date().toISOString();
     const entities = records.flatMap((record) => this.mapToInternal(record));
+    this.lastSourceRecords = records.map((record) => ({
+      source: this.name,
+      module: record.module,
+      sourceRecordId: record.id,
+      modifiedAt: record.modifiedTime,
+      payload: record.fields,
+    }));
     const latestModifiedTime = records
       .map((record) => record.modifiedTime)
       .filter((value): value is string => Boolean(value))
@@ -121,9 +142,7 @@ export class ZohoConnector implements BaseConnector<ZohoRecord> {
             lastSuccessfulSyncAt: completedAt,
           }
         : checkpoint,
-      warnings: [
-        "Zoho sync is scaffolded only. Add authenticated fetches, pagination, and persistence next.",
-      ],
+      warnings,
     };
   }
 }
