@@ -124,6 +124,17 @@ function deriveRelationsFromEntity(entity: InternalEntity): EntityRelation[] {
           source: entity.source,
         }),
       ].filter(isRelation);
+    case "inventory_item":
+      return [
+        relationIfPresent({
+          type: "references_product",
+          fromEntityType: "inventory_item",
+          fromEntityId: entity.id,
+          toEntityType: "product",
+          toEntityId: entity.productId,
+          source: entity.source,
+        }),
+      ].filter(isRelation);
     case "activity":
       return [
         relationIfPresent({

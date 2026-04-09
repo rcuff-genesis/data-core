@@ -5,8 +5,10 @@ export type EntityType =
   | "account"
   | "deal"
   | "sales_order"
+  | "build"
   | "ordered_item"
   | "product"
+  | "inventory_item"
   | "activity"
   | "document";
 
@@ -124,6 +126,25 @@ export interface SalesOrder extends BaseEntity {
   orderedItemIds?: string[];
 }
 
+export interface Build extends BaseEntity {
+  type: "build";
+  name: string;
+  orderNumber?: string;
+  serialNumber?: string;
+  model?: string;
+  status?: string;
+  startTime?: string;
+  expectedDate?: string;
+  deliverByDate?: string;
+  quantityIndex?: number;
+  bomVersion?: string;
+  shippingState?: string;
+  shippingCountry?: string;
+  nickname?: string;
+  testNotes?: string;
+  qcNotes?: string;
+}
+
 export interface OrderedItem extends BaseEntity {
   type: "ordered_item";
   salesOrderId: string;
@@ -145,6 +166,24 @@ export interface Product extends BaseEntity {
   unitPrice?: number;
   category?: string;
   isTaxable?: boolean;
+  description?: string;
+  model?: string;
+  countryOfOrigin?: string;
+  safetyStock?: number;
+  failureRate?: number;
+}
+
+export interface InventoryItem extends BaseEntity {
+  type: "inventory_item";
+  name: string;
+  productId?: string;
+  partNumber?: string;
+  quantity?: number;
+  location?: string;
+  serialNumber?: string;
+  inventoryType?: "stock" | "floor";
+  lastUpdated?: string;
+  safetyStock?: number;
 }
 
 export interface Activity extends BaseEntity {
@@ -180,7 +219,9 @@ export type InternalEntity =
   | Account
   | Deal
   | SalesOrder
+  | Build
   | OrderedItem
   | Product
+  | InventoryItem
   | Activity
   | Document;

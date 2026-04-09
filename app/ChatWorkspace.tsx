@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState, useTransition } from "react";
 import type { ConnectorStatus } from "@/src/connectors/catalog";
-import { SyncZohoButton } from "./SyncZohoButton";
+import { SyncConnectorButton } from "./SyncConnectorButton";
 import {
   Bar,
   BarChart,
@@ -393,8 +393,11 @@ export function ChatWorkspace({
                         </a>
                       ) : null}
 
-                      {connector.key === "zoho" && connector.state === "connected" ? (
-                        <SyncZohoButton />
+                      {connector.state === "connected" ? (
+                        <SyncConnectorButton
+                          connector={connector.key}
+                          label={connector.name}
+                        />
                       ) : null}
                     </div>
                   </div>

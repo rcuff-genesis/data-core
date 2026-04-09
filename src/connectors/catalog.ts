@@ -1,3 +1,4 @@
+import { getWalnutConnectionStatus, getWalnutCoverageSummary } from "./walnut";
 import { getZohoAuthUrl, getZohoConnectionStatus, getZohoCoverageSummary } from "./zoho";
 
 export type ConnectorStatusState =
@@ -19,9 +20,12 @@ export interface ConnectorStatus {
 }
 
 export async function getConnectorStatuses(): Promise<ConnectorStatus[]> {
-  const [zohoStatus] = await Promise.all([getZohoConnectorStatus()]);
+  const [zohoStatus, walnutStatus] = await Promise.all([
+    getZohoConnectorStatus(),
+    getWalnutConnectorStatus(),
+  ]);
 
-  return [zohoStatus];
+  return [zohoStatus, walnutStatus];
 }
 
 export async function getZohoConnectorStatus(): Promise<ConnectorStatus> {
@@ -72,3 +76,55 @@ export async function getZohoConnectorStatus(): Promise<ConnectorStatus> {
       "Set NEXT_PUBLIC_ZOHO_CLIENT_ID or ZOHO_CLIENT_ID plus ZOHO_REDIRECT_URI.",
   };
 }
+
+export async function getWalnutConnectorStatus(): Promise<ConnectorStatus> {
+  const connection = await getWalnutConnectionStatus();
+  const coverage = getWalnutCoverageSummary();
+
+  if (!connection.configured) {
+    return {
+      key: "walnut",
+      name: "Walnut",
+      category: "database",
+      state: "not_configured",
+      description:
+        "Internal Walnut data from a separate Postgres database, to be mapped into the shared ontology.",
+      message: "Missing Walnut database env vars.",
+      details:
+        "Set WALNUT_DATABASE_URL or WALNUT_DB_HOST/WALNUT_DB_PORT/WALNUT_DB_NAME/WALNUT_DB_USER/WALNUT_DB_PASSWORD.",
+    };
+  }
+
+  if (!connection.reachable) {
+    return {
+      key: "walnut",
+      name: "Walnut",
+      category: "database",
+      state: "ready_to_connect",
+      description:
+        "Internal Walnut data from a separate Postgres database, to be mapped into the shared ontology.",
+      message: "Walnut env vars are present, but the database connection failed.",
+      actionLabel: "View Status",
+      actionHref: "/api/connectors/walnut/status",
+      details: connection.error ?? coverage,
+    };
+  }
+
+  const tableSummary =
+    connection.tableCount != null
+      ? `Found ${connection.tableCount} tables in schema ${connection.schema ?? "public"}.`
+      : "Connected to Walnut.";
+
+  return {
+      key: "walnut",
+      name: "Walnut",
+      category: "database",
+      state: "connected",
+      description:
+        "Internal Walnut data from a separate Postgres database, to be mapped into the shared ontology.",
+    message: "Ready to sync Walnut data into the mapped database.",
+      actionLabel: "View Status",
+      actionHref: "/api/connectors/walnut/status",
+      details: `${coverage} ${tableSummary}`,
+    };
+  }

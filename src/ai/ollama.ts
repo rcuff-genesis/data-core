@@ -46,35 +46,94 @@ function getOllamaConfig(): { baseUrl: string; model: string } {
   };
 }
 
+const OLLAMA_MAX_ATTEMPTS = 2;
+
+function shouldRetryOllamaRequest(status: number, text: string): boolean {
+  const normalized = text.toLowerCase();
+
+  return (
+    status >= 500 ||
+    normalized.includes("runner process has terminated") ||
+    normalized.includes("server busy")
+  );
+}
+
+function isTransientOllamaError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const normalized = error.message.toLowerCase();
+
+  return (
+    normalized.includes("fetch failed") ||
+    normalized.includes("socket hang up") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("timed out")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function callOllama(
   messages: OllamaMessage[],
   tools?: OllamaTool[],
 ): Promise<OllamaChatResponse> {
   const { baseUrl, model } = getOllamaConfig();
+  let lastError: Error | null = null;
 
-  const body: Record<string, unknown> = { model, stream: false, messages };
+  for (let attempt = 1; attempt <= OLLAMA_MAX_ATTEMPTS; attempt += 1) {
+    const body: Record<string, unknown> = { model, stream: false, messages };
 
-  if (tools && tools.length > 0) {
-    body.tools = tools;
+    if (tools && tools.length > 0) {
+      body.tools = tools;
+    }
+
+    try {
+      const response = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        const error = new Error(
+          text
+            ? `Ollama request failed with status ${response.status}: ${text}`
+            : `Ollama request failed with status ${response.status}.`,
+        );
+
+        if (
+          attempt < OLLAMA_MAX_ATTEMPTS &&
+          shouldRetryOllamaRequest(response.status, text)
+        ) {
+          lastError = error;
+          await sleep(500 * attempt);
+          continue;
+        }
+
+        throw error;
+      }
+
+      return (await response.json()) as OllamaChatResponse;
+    } catch (error) {
+      if (attempt < OLLAMA_MAX_ATTEMPTS && isTransientOllamaError(error)) {
+        lastError = error instanceof Error ? error : new Error("Fetch failed");
+        await sleep(500 * attempt);
+        continue;
+      }
+
+      throw error;
+    }
   }
 
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      text
-        ? `Ollama request failed with status ${response.status}: ${text}`
-        : `Ollama request failed with status ${response.status}.`,
-    );
-  }
-
-  return (await response.json()) as OllamaChatResponse;
+  throw lastError ?? new Error("Ollama request failed after retry.");
 }
 
 export async function chatWithOllama(messages: OllamaMessage[]): Promise<string> {

@@ -4,6 +4,7 @@ import type { SalesOrderReadModel } from "../ai/types";
 import type {
   Account,
   Activity,
+  Build,
   Contact,
   Deal,
   Document,
@@ -234,6 +235,10 @@ export class OntologyQueryService {
     return this.entityStore.getSalesOrderById(salesOrderId);
   }
 
+  async getBuild(buildId: string): Promise<Build | null> {
+    return this.entityStore.getBuildById(buildId);
+  }
+
   async searchDocuments(queryText: string, limit = 10): Promise<Document[]> {
     return this.entityStore.searchDocuments(queryText, limit);
   }
@@ -256,8 +261,8 @@ export class OntologyQueryService {
         WHERE canonical_json::text ILIKE $1
         ORDER BY
           CASE
-            WHEN LOWER(COALESCE(canonical_json->>'name', canonical_json->>'subject', canonical_json->>'fullName', canonical_json->>'title', '')) = $3 THEN 0
-            WHEN LOWER(COALESCE(canonical_json->>'name', canonical_json->>'subject', canonical_json->>'fullName', canonical_json->>'title', '')) LIKE $4 THEN 1
+            WHEN LOWER(COALESCE(canonical_json->>'name', canonical_json->>'subject', canonical_json->>'fullName', canonical_json->>'title', canonical_json->>'orderNumber', canonical_json->>'serialNumber', canonical_json->>'partNumber', canonical_json->>'sku', canonical_json->>'productCode', '')) = $3 THEN 0
+            WHEN LOWER(COALESCE(canonical_json->>'name', canonical_json->>'subject', canonical_json->>'fullName', canonical_json->>'title', canonical_json->>'orderNumber', canonical_json->>'serialNumber', canonical_json->>'partNumber', canonical_json->>'sku', canonical_json->>'productCode', '')) LIKE $4 THEN 1
             ELSE 2
           END,
           entity_updated_at DESC NULLS LAST,
@@ -485,7 +490,19 @@ function resolveEntityTitle(
   entityType: string,
   canonicalJson: Record<string, unknown>,
 ): string {
-  const titleFields = ["name", "subject", "fullName", "title"];
+  const titleFields = [
+    "name",
+    "subject",
+    "fullName",
+    "title",
+    "partNumber",
+    "sku",
+    "productCode",
+    "orderNumber",
+    "serialNumber",
+    "model",
+    "location",
+  ];
 
   for (const field of titleFields) {
     const value = canonicalJson[field];
@@ -506,6 +523,10 @@ function buildSnippet(canonicalJson: Record<string, unknown>): string {
     "campaignName",
     "nextStep",
     "pipeline",
+    "partNumber",
+    "orderNumber",
+    "serialNumber",
+    "location",
     "summary",
     "textPreview",
   ];

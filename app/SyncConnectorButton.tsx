@@ -20,7 +20,14 @@ interface SyncResponse {
   };
 }
 
-export function SyncZohoButton() {
+export function SyncConnectorButton({
+  connector,
+  label,
+}: {
+  connector: string;
+  label: string;
+}) {
+  const isWalnut = connector === "walnut";
   const [activeMode, setActiveMode] = useState<SyncMode | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -37,24 +44,24 @@ export function SyncZohoButton() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          connector: "zoho",
+          connector,
           mode,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as SyncResponse;
 
       if (!response.ok || !payload.ok) {
-        setMessage(payload.error ?? `Zoho ${mode} sync failed.`);
+        setMessage(payload.error ?? `${label} ${mode} sync failed.`);
         return;
       }
 
       const completedMode = payload.result?.mode ?? mode;
       setMessage(
-        `${labelForMode(completedMode)} finished. Fetched ${payload.result?.recordsFetched ?? 0} records, mapped ${payload.result?.recordsMapped ?? 0} entities, persisted ${payload.result?.entitiesPersisted ?? 0} entities and ${payload.result?.relationsPersisted ?? 0} relations.`,
+        `${isWalnut ? `${label} import` : labelForMode(completedMode)} finished. Fetched ${payload.result?.recordsFetched ?? 0} records, mapped ${payload.result?.recordsMapped ?? 0} entities, persisted ${payload.result?.entitiesPersisted ?? 0} entities and ${payload.result?.relationsPersisted ?? 0} relations.`,
       );
       setWarnings(payload.result?.warnings ?? []);
     } catch {
-      setMessage(`Zoho ${mode} sync request failed.`);
+      setMessage(`${label} ${isWalnut ? "import" : `${mode} sync`} request failed.`);
     } finally {
       setActiveMode(null);
     }
@@ -65,14 +72,18 @@ export function SyncZohoButton() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={() => handleSync("incremental")}
-          disabled={isSyncing}
-          className="inline-flex h-11 items-center justify-center rounded-full border border-stone-300 bg-white px-5 text-sm font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {activeMode === "incremental" ? "Syncing Incremental..." : "Incremental Sync"}
-        </button>
+        {!isWalnut ? (
+          <button
+            type="button"
+            onClick={() => handleSync("incremental")}
+            disabled={isSyncing}
+            className="inline-flex h-11 items-center justify-center rounded-full border border-stone-300 bg-white px-5 text-sm font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {activeMode === "incremental"
+              ? "Syncing Incremental..."
+              : "Incremental Sync"}
+          </button>
+        ) : null}
 
         <button
           type="button"
@@ -80,7 +91,13 @@ export function SyncZohoButton() {
           disabled={isSyncing}
           className="inline-flex h-11 items-center justify-center rounded-full bg-stone-900 px-5 text-sm font-medium text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {activeMode === "full" ? "Syncing Full..." : "Full Sync"}
+          {activeMode === "full"
+            ? isWalnut
+              ? "Importing Walnut..."
+              : "Syncing Full..."
+            : isWalnut
+              ? "Import Walnut"
+              : "Full Sync"}
         </button>
       </div>
 

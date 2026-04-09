@@ -8,6 +8,7 @@ export type RelationType =
   | "belongs_to_account"
   | "linked_to_contact"
   | "results_in_sales_order"
+  | "fulfills_sales_order"
   | "contains_ordered_item"
   | "references_product"
   | "owned_by"
@@ -56,12 +57,16 @@ export const relationCatalog: Record<
     from: ["deal"],
     to: ["sales_order"],
   },
+  fulfills_sales_order: {
+    from: ["build"],
+    to: ["sales_order"],
+  },
   contains_ordered_item: {
     from: ["sales_order"],
     to: ["ordered_item"],
   },
   references_product: {
-    from: ["ordered_item", "deal", "document"],
+    from: ["ordered_item", "deal", "document", "inventory_item"],
     to: ["product"],
   },
   owned_by: {
@@ -72,6 +77,7 @@ export const relationCatalog: Record<
       "account",
       "deal",
       "sales_order",
+      "build",
       "activity",
       "document",
     ],
@@ -90,8 +96,10 @@ export const relationCatalog: Record<
       "account",
       "deal",
       "sales_order",
+      "build",
       "ordered_item",
       "product",
+      "inventory_item",
       "activity",
     ],
     to: ["document"],
@@ -104,8 +112,10 @@ export const relationCatalog: Record<
       "account",
       "deal",
       "sales_order",
+      "build",
       "ordered_item",
       "product",
+      "inventory_item",
       "activity",
       "document",
     ],
@@ -116,8 +126,10 @@ export const relationCatalog: Record<
       "account",
       "deal",
       "sales_order",
+      "build",
       "ordered_item",
       "product",
+      "inventory_item",
       "activity",
       "document",
     ],

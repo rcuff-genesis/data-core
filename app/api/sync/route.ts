@@ -1,3 +1,4 @@
+import { runWalnutSync } from "@/src/connectors/walnut";
 import { runZohoSync } from "@/src/connectors/zoho";
 
 export const runtime = "nodejs";
@@ -9,18 +10,23 @@ export async function POST(request: Request) {
       mode?: "full" | "incremental";
     };
 
-    if (body.connector && body.connector !== "zoho") {
+    const connector = body.connector ?? "zoho";
+
+    if (!["zoho", "walnut"].includes(connector)) {
       return Response.json(
         {
           ok: false,
-          error: `Unsupported connector "${body.connector}".`,
+          error: `Unsupported connector "${connector}".`,
         },
         { status: 400 },
       );
     }
 
     const mode = body.mode ?? "incremental";
-    const { plan, result } = await runZohoSync(mode);
+    const { plan, result } =
+      connector === "walnut"
+        ? await runWalnutSync(mode)
+        : await runZohoSync(mode);
 
     return Response.json({
       ok: true,

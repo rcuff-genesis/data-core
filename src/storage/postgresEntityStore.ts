@@ -3,11 +3,13 @@ import type { EntityStore, SalesOrderReadModel } from "../ai/types";
 import type {
   Account,
   Activity,
+  Build,
   Company,
   Contact,
   Deal,
   Document,
   EntityType,
+  InventoryItem,
   Lead,
   OrderedItem,
   Product,
@@ -89,6 +91,14 @@ export class PostgresEntityStore implements EntityStore {
       orderedItems,
       products,
     };
+  }
+
+  async getBuildById(id: string): Promise<Build | null> {
+    return getEntityById<Build>(id, "build");
+  }
+
+  async getProductById(id: string): Promise<Product | null> {
+    return getEntityById<Product>(id, "product");
   }
 
   async searchDocuments(queryText: string, limit = 10): Promise<Document[]> {
@@ -231,6 +241,18 @@ export class PostgresEntityStore implements EntityStore {
 
   async listSalesOrders(opts: ListOptions = {}): Promise<SalesOrder[]> {
     return listEntities<SalesOrder>("sales_order", opts);
+  }
+
+  async listBuilds(opts: ListOptions = {}): Promise<Build[]> {
+    return listEntities<Build>("build", opts);
+  }
+
+  async listProducts(opts: ListOptions = {}): Promise<Product[]> {
+    return listEntities<Product>("product", opts);
+  }
+
+  async listInventoryItems(opts: ListOptions = {}): Promise<InventoryItem[]> {
+    return listEntities<InventoryItem>("inventory_item", opts);
   }
 
   async countByField(

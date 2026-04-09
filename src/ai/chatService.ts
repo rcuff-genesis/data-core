@@ -39,6 +39,18 @@ export async function answerDataQuestion(
     throw new Error("A user message is required.");
   }
 
+  const clarificationQuestion = buildClarificationQuestion(
+    conversation,
+    latestUserMessage.content,
+  );
+
+  if (clarificationQuestion) {
+    return {
+      answer: clarificationQuestion,
+      toolCallLog: [],
+    };
+  }
+
   const statusSummary = await ontologyQueryService.getStatusSummary();
   const entityCounts = statusSummary.entityCounts
     .map((entry) => `${entry.entityType}: ${entry.count}`)
@@ -73,28 +85,157 @@ function buildSystemPrompt(entityCounts: string): string {
   return [
     `You are Data Core AI. Today is ${today}.`,
     "You have tools to query a business ontology database (Zoho CRM data synced to Postgres).",
-    "Entity types: lead, contact, account, deal, sales_order, activity, campaign, document.",
+    "Entity types: lead, contact, account, deal, sales_order, build, product, inventory_item, activity, campaign, document.",
     "The database supports this_month filtering for lists and grouped counts using stored entity timestamps.",
     "",
     `Approximate entity counts: ${entityCounts || "unknown - run get_ontology_status"}`,
     "",
     "## Rules - follow these exactly:",
-    "1. ALWAYS call a tool before answering. Never answer from memory or guesses.",
+    "1. Call a tool before every data-backed answer. If the user's request is too ambiguous to choose the right tool or filter, ask one short clarifying question first.",
     "2. After getting tool results, answer in plain English. Do NOT repeat JSON or code.",
     "3. State exact numbers from the tool results. Do not estimate or approximate.",
     "4. If data is not in the tool result, say 'I don't have that data' and do not invent it.",
     "5. For broad business or pipeline questions, start with get_funnel_summary.",
     "6. For counts or totals use get_ontology_status or count_by_field.",
-    "7. For lists use list_leads, list_deals, list_accounts, list_contacts, list_activities, or list_sales_orders.",
-    "8. For name lookups use search_entities. If a result matters, follow up with get_lead, get_account, get_deal, get_sales_order, or explore_entity_graph.",
+    "7. For lists use list_leads, list_deals, list_accounts, list_contacts, list_products, list_inventory_items, list_builds, list_activities, or list_sales_orders.",
+    "8. For name lookups use search_entities. If there are multiple plausible matches, ask the user which one they mean. If a single result matters, follow up with get_lead, get_account, get_deal, get_sales_order, or explore_entity_graph.",
     "9. For open-ended relationship questions, use explore_entity_graph to traverse the ontology relations.",
     "10. For breakdowns (X by Y) use count_by_field and pass filters when needed.",
     "11. If the user asks for a chart, graph, visual, breakdown, or distribution, call generate_chart after you have numeric results.",
     "12. For sales-order questions about this month, use list_sales_orders or count_by_field with period='this_month'.",
-    "13. The database does not support arbitrary natural-language time ranges like 'past week' unless a tool explicitly supports them.",
-    "14. If the user asks for closed leads, interpret that as terminal lead stages and be explicit about the filter you chose.",
-    "15. Keep answers short and direct.",
+    "13. For Walnut inventory-health or shortage questions, use get_inventory_health_summary or list_low_stock_parts.",
+    "14. For Walnut forecasting, parts planning, or build-demand questions, use forecast_parts_for_active_builds.",
+    "15. For one Walnut build's materials or shortages, use get_build_requirements.",
+    "16. For questions about Walnut builds matched to Zoho sales orders, use summarize_zoho_walnut_alignment or explore_entity_graph.",
+    "17. The database does not support arbitrary natural-language time ranges like 'past week' unless a tool explicitly supports them.",
+    "18. If the user asks for a time range the tools do not support, ask them to choose between a supported filter or the full synced dataset.",
+    "19. If the user asks for rankings like 'top' or 'best' and the metric is unclear, ask what metric they want.",
+    "20. If the user asks for closed leads, interpret that as terminal lead stages and be explicit about the filter you chose.",
+    "21. Keep clarifying questions short, ask only one at a time, and keep answers short and direct.",
   ].join("\n");
+}
+
+const ENTITY_PATTERNS: Array<{ key: string; pattern: RegExp }> = [
+  { key: "lead", pattern: /\bleads?\b/ },
+  { key: "deal", pattern: /\bdeals?\b/ },
+  { key: "account", pattern: /\baccounts?\b|\bcompanies?\b|\bcustomers?\b/ },
+  { key: "contact", pattern: /\bcontacts?\b|\bpeople\b/ },
+  { key: "sales_order", pattern: /\bsales orders?\b|\borders?\b/ },
+  { key: "build", pattern: /\bbuilds?\b/ },
+  { key: "product", pattern: /\bproducts?\b|\bparts?\b|\bskus?\b/ },
+  {
+    key: "inventory_item",
+    pattern: /\binventory\b|\bstock\b|\bwarehouse\b|\bon hand\b/,
+  },
+  {
+    key: "activity",
+    pattern: /\bactivities\b|\bactivity\b|\bcalls?\b|\bemails?\b|\bmeetings?\b|\btasks?\b/,
+  },
+  { key: "pipeline", pattern: /\bpipeline\b|\bfunnel\b|\bbusiness\b/ },
+  { key: "sync", pattern: /\bsync\b|\bstatus\b|\bhealth\b/ },
+];
+
+const UNSUPPORTED_TIME_RANGE_PATTERN =
+  /\b(last|past|previous)\s+(week|month|quarter|year|\d+\s+days?)\b|\b(yesterday|today|tomorrow|q[1-4])\b/;
+
+function buildClarificationQuestion(
+  conversation: ChatMessage[],
+  latestUserMessage: string,
+): string | null {
+  const normalized = normalizeMessage(latestUserMessage);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const currentEntities = extractEntities(normalized);
+  const recentContextEntity = findRecentContextEntity(conversation.slice(0, -1));
+  const hasEntityContext =
+    currentEntities.size > 0 || recentContextEntity !== null;
+
+  if (
+    UNSUPPORTED_TIME_RANGE_PATTERN.test(normalized) &&
+    !normalized.includes("this month")
+  ) {
+    return "I can reliably query `this month` or the full synced dataset right now. Which time range do you want?";
+  }
+
+  if (
+    /\b(top|best|biggest|largest|highest|lowest|worst)\b/.test(normalized) &&
+    !/\b(amount|value|count|revenue|total|volume)\b/.test(normalized)
+  ) {
+    const subject = currentEntities.has("deal")
+      ? "deals"
+      : currentEntities.has("lead")
+        ? "leads"
+        : currentEntities.has("account")
+          ? "accounts"
+          : currentEntities.has("sales_order")
+            ? "sales orders"
+            : "results";
+
+    return `What should "top" mean for ${subject}: highest amount, highest count, or most recent?`;
+  }
+
+  if (!hasEntityContext && needsEntityClarification(normalized)) {
+    return "Which area should I look at: leads, deals, accounts, contacts, sales orders, builds, products, inventory, activities, or sync status?";
+  }
+
+  if (
+    !hasEntityContext &&
+    /\b(this|that|those|them|it|ones?)\b/.test(normalized)
+  ) {
+    return "What records are you referring to here: leads, deals, accounts, contacts, sales orders, builds, products, inventory, or activities?";
+  }
+
+  if (
+    !hasEntityContext &&
+    /\b(analyze|analysis|insights|overview|summary|help me|show me|what should i know|what's going on|hows it going|how is it going)\b/.test(
+      normalized,
+    )
+  ) {
+    return "What do you want to analyze first: pipeline health, sales orders, Walnut builds, inventory, parts, account activity, or sync health?";
+  }
+
+  return null;
+}
+
+function normalizeMessage(message: string): string {
+  return message.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function extractEntities(message: string): Set<string> {
+  const entities = new Set<string>();
+
+  for (const candidate of ENTITY_PATTERNS) {
+    if (candidate.pattern.test(message)) {
+      entities.add(candidate.key);
+    }
+  }
+
+  return entities;
+}
+
+function findRecentContextEntity(conversation: ChatMessage[]): string | null {
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    const entities = extractEntities(normalizeMessage(conversation[index].content));
+    const entity = [...entities][0];
+
+    if (entity) {
+      return entity;
+    }
+  }
+
+  return null;
+}
+
+function needsEntityClarification(message: string): boolean {
+  return (
+    message.split(" ").length <= 4 ||
+    /\b(list|show|find|get|count|how many|breakdown|chart|graph|visual|recent|latest|open|closed|won|lost)\b/.test(
+      message,
+    )
+  );
 }
 
 function buildFallbackChart(

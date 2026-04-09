@@ -1,8 +1,10 @@
 import type {
   Account,
+  Build,
   Company,
   Deal,
   Document,
+  InventoryItem,
   InternalEntity,
   Lead,
   OrderedItem,
@@ -21,6 +23,11 @@ export interface EntityStore {
   getCompanyById(id: string): Promise<Company | null>;
   getDealById(id: string): Promise<Deal | null>;
   getSalesOrderById(id: string): Promise<SalesOrderReadModel | null>;
+  getBuildById(id: string): Promise<Build | null>;
+  getProductById(id: string): Promise<Product | null>;
+  listProducts?(opts?: Record<string, unknown>): Promise<Product[]>;
+  listInventoryItems?(opts?: Record<string, unknown>): Promise<InventoryItem[]>;
+  listBuilds?(opts?: Record<string, unknown>): Promise<Build[]>;
   searchDocuments(query: string, limit?: number): Promise<Document[]>;
   upsertEntities?(entities: InternalEntity[]): Promise<void>;
 }

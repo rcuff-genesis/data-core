@@ -1,9 +1,20 @@
 import "server-only";
 
 import type { OllamaTool } from "./ollama";
+import { query } from "../db/client";
 import { PostgresEntityStore } from "../storage/postgresEntityStore";
 import { OntologyQueryService } from "../ontology/queryService";
-import type { Activity, Account, Contact, Deal, Lead, SalesOrder } from "../ontology/entities";
+import type {
+  Activity,
+  Account,
+  Build,
+  Contact,
+  Deal,
+  InventoryItem,
+  Lead,
+  Product,
+  SalesOrder,
+} from "../ontology/entities";
 import type {
   CountByFieldOptions,
   CountByFieldRow,
@@ -76,7 +87,7 @@ export const AGENT_TOOLS: OllamaTool[] = [
           entity_type: {
             type: "string",
             description:
-              "Optional entity type filter: lead, contact, account, deal, sales_order, activity, document, campaign, product",
+              "Optional entity type filter: lead, contact, account, deal, sales_order, build, activity, document, campaign, product, inventory_item",
           },
           limit: { type: "number", description: "Max results (default 8)" },
         },
@@ -135,6 +146,112 @@ export const AGENT_TOOLS: OllamaTool[] = [
   {
     type: "function",
     function: {
+      name: "get_inventory_health_summary",
+      description:
+        "Summarize Walnut inventory health across parts, on-hand counts, and safety-stock risk.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_low_stock_parts",
+      description:
+        "List Walnut parts that are at or below safety stock. Use for shortage and replenishment questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Max results (default 20)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "forecast_parts_for_active_builds",
+      description:
+        "Forecast part demand for active Walnut builds using synced Walnut builds, system_map, and BOM data stored in the local database.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Max results (default 20)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_build_requirements",
+      description:
+        "Get the Walnut part requirements for one synced build, including required quantity, on-hand inventory, and shortages from the local mapped database.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Build entity ID" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "summarize_zoho_walnut_alignment",
+      description:
+        "Summarize how Walnut builds line up with Zoho sales orders using synced cross-system relations in the local database.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_products",
+      description:
+        "List products or Walnut parts. Filter by keyword or part number.",
+      parameters: {
+        type: "object",
+        properties: {
+          search: { type: "string", description: "Keyword search" },
+          limit: { type: "number", description: "Max results (default 20)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_inventory_items",
+      description:
+        "List Walnut inventory items. Filter by part number, serial number, location, or keyword.",
+      parameters: {
+        type: "object",
+        properties: {
+          search: { type: "string", description: "Keyword search" },
+          limit: { type: "number", description: "Max results (default 20)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_builds",
+      description:
+        "List Walnut builds. Filter by order number, serial number, model, or status keyword.",
+      parameters: {
+        type: "object",
+        properties: {
+          search: { type: "string", description: "Keyword search" },
+          limit: { type: "number", description: "Max results (default 20)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "list_contacts",
       description: "List contacts. Filter by keyword.",
       parameters: {
@@ -176,6 +293,21 @@ export const AGENT_TOOLS: OllamaTool[] = [
           },
           limit: { type: "number", description: "Max results (default 20)" },
         },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_build",
+      description:
+        "Get one Walnut build by ID, including order number, serial number, model, status, and dates.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Build entity ID" },
+        },
+        required: ["id"],
       },
     },
   },
@@ -249,7 +381,7 @@ export const AGENT_TOOLS: OllamaTool[] = [
         properties: {
           entity_type: {
             type: "string",
-            description: "Entity type: lead, deal, account, contact, activity, sales_order",
+            description: "Entity type: lead, deal, account, contact, activity, sales_order, build, inventory_item, product",
           },
           field: {
             type: "string",
@@ -457,6 +589,159 @@ export async function executeAgentTool(
       return `Found ${accounts.length} accounts:\n${formatAccounts(accounts)}`;
     }
 
+    case "get_inventory_health_summary": {
+      const summary = await getInventoryHealthSummary();
+
+      return [
+        `Tracked Walnut parts with inventory: ${summary.totalParts}`,
+        `Parts at or below safety stock: ${summary.lowStockParts}`,
+        `Parts with zero on hand: ${summary.zeroStockParts}`,
+        summary.topRisk.length
+          ? `Highest risk parts:\n${summary.topRisk
+              .map(
+                (item) =>
+                  `- ${item.partNumber}: on hand ${item.onHand}, safety stock ${item.safetyStock}, shortage ${item.shortage}`,
+              )
+              .join("\n")}`
+          : "Highest risk parts: none",
+      ].join("\n");
+    }
+
+    case "list_low_stock_parts": {
+      const limit = typeof args.limit === "number" ? Math.min(args.limit, 50) : 20;
+      const parts = await listLowStockParts(limit);
+
+      if (parts.length === 0) {
+        return "No low-stock Walnut parts found.";
+      }
+
+      return `Found ${parts.length} low-stock parts:\n${parts
+        .map(
+          (part) =>
+            `- ${part.partNumber}${part.description ? ` - ${part.description}` : ""} - on hand ${part.onHand}, safety stock ${part.safetyStock}, shortage ${part.shortage}`,
+        )
+        .join("\n")}`;
+    }
+
+    case "forecast_parts_for_active_builds": {
+      const limit = typeof args.limit === "number" ? Math.min(args.limit, 50) : 20;
+      const forecast = await forecastPartsForActiveBuilds(limit);
+
+      if (forecast.length === 0) {
+        return "No active-build part forecast is available from the synced Walnut data.";
+      }
+
+      return `Top forecasted part constraints for active Walnut builds:\n${forecast
+        .map(
+          (row) =>
+            `- ${row.partNumber}${row.description ? ` - ${row.description}` : ""} - required ${row.requiredQty}, on hand ${row.onHand}, shortage ${row.shortage}, used by ${row.buildCount} active builds across ${row.modelCount} models`,
+        )
+        .join("\n")}`;
+    }
+
+    case "get_build_requirements": {
+      const id = String(args.id ?? "");
+      const requirements = await getBuildRequirements(id);
+
+      if (!requirements) {
+        return `Build not found: ${id}`;
+      }
+
+      const header = [
+        `Build requirements: ${requirements.build.name} (${requirements.build.id})`,
+        requirements.build.orderNumber
+          ? `Order number: ${requirements.build.orderNumber}`
+          : null,
+        requirements.build.model ? `Model: ${requirements.build.model}` : null,
+        requirements.build.status ? `Status: ${requirements.build.status}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      if (!requirements.build.model) {
+        return `${header}\nNo model is available for this build, so I can't resolve Walnut BOM requirements yet.`;
+      }
+
+      if (requirements.parts.length === 0) {
+        return `${header}\nNo synced Walnut BOM requirements were found for this build model.`;
+      }
+
+      return `${header}\nRequired parts:\n${requirements.parts
+        .map(
+          (part) =>
+            `- ${part.partNumber}${part.description ? ` - ${part.description}` : ""} - required ${part.requiredQty}, on hand ${part.onHand}, shortage ${part.shortage}`,
+        )
+        .join("\n")}`;
+    }
+
+    case "summarize_zoho_walnut_alignment": {
+      const summary = await summarizeZohoWalnutAlignment();
+
+      return [
+        `Walnut builds tracked: ${summary.totalWalnutBuilds}`,
+        `Walnut builds linked to Zoho sales orders: ${summary.linkedWalnutBuilds}`,
+        `Walnut builds not linked to Zoho sales orders: ${summary.unlinkedWalnutBuilds}`,
+        `Zoho sales orders tracked: ${summary.totalZohoSalesOrders}`,
+        `Zoho sales orders linked to Walnut builds: ${summary.linkedZohoSalesOrders}`,
+        `Zoho sales orders without a linked Walnut build: ${summary.unlinkedZohoSalesOrders}`,
+        summary.sampleUnlinkedBuilds.length
+          ? `Sample unlinked Walnut builds:\n${summary.sampleUnlinkedBuilds
+              .map(
+                (build) =>
+                  `- ${build.orderNumber ?? build.name}${build.model ? ` - ${build.model}` : ""}${build.status ? ` [${build.status}]` : ""}`,
+              )
+              .join("\n")}`
+          : "Sample unlinked Walnut builds: none",
+        summary.sampleUnlinkedOrders.length
+          ? `Sample Zoho sales orders without a Walnut build:\n${summary.sampleUnlinkedOrders
+              .map(
+                (order) =>
+                  `- ${order.orderNumber ?? order.subject}${order.status ? ` [${order.status}]` : ""}`,
+              )
+              .join("\n")}`
+          : "Sample Zoho sales orders without a Walnut build: none",
+      ].join("\n");
+    }
+
+    case "list_products": {
+      const products = await store.listProducts({
+        search: typeof args.search === "string" ? args.search : undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      });
+
+      if (products.length === 0) {
+        return "No products found.";
+      }
+
+      return `Found ${products.length} products:\n${formatProducts(products)}`;
+    }
+
+    case "list_inventory_items": {
+      const inventoryItems = await store.listInventoryItems({
+        search: typeof args.search === "string" ? args.search : undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      });
+
+      if (inventoryItems.length === 0) {
+        return "No inventory items found.";
+      }
+
+      return `Found ${inventoryItems.length} inventory items:\n${formatInventoryItems(inventoryItems)}`;
+    }
+
+    case "list_builds": {
+      const builds = await store.listBuilds({
+        search: typeof args.search === "string" ? args.search : undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      });
+
+      if (builds.length === 0) {
+        return "No builds found.";
+      }
+
+      return `Found ${builds.length} builds:\n${formatBuilds(builds)}`;
+    }
+
     case "list_contacts": {
       const contacts = await store.listContacts({
         search: typeof args.search === "string" ? args.search : undefined,
@@ -495,6 +780,30 @@ export async function executeAgentTool(
       }
 
       return `Found ${salesOrders.length} sales orders:\n${formatSalesOrders(salesOrders)}`;
+    }
+
+    case "get_build": {
+      const id = String(args.id ?? "");
+      const build = await queryService.getBuild(id);
+
+      if (!build) {
+        return `Build not found: ${id}`;
+      }
+
+      return [
+        `Build: ${build.name} (${build.id})`,
+        build.orderNumber ? `Order number: ${build.orderNumber}` : null,
+        build.serialNumber ? `Serial number: ${build.serialNumber}` : null,
+        build.model ? `Model: ${build.model}` : null,
+        build.status ? `Status: ${build.status}` : null,
+        build.expectedDate ? `Expected date: ${build.expectedDate}` : null,
+        build.deliverByDate ? `Deliver by: ${build.deliverByDate}` : null,
+        build.shippingState ? `Shipping state: ${build.shippingState}` : null,
+        build.shippingCountry ? `Shipping country: ${build.shippingCountry}` : null,
+        build.bomVersion ? `BOM version: ${build.bomVersion}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
     }
 
     case "get_lead": {
@@ -738,4 +1047,468 @@ function formatSalesOrders(salesOrders: SalesOrder[]): string {
         `- ${salesOrder.subject}${salesOrder.status ? ` [${salesOrder.status}]` : ""}${salesOrder.totalAmount != null ? ` - ${salesOrder.totalAmount}${salesOrder.currency ? ` ${salesOrder.currency}` : ""}` : ""}${salesOrder.createdAt ? ` - created ${salesOrder.createdAt.slice(0, 10)}` : ""}`,
     )
     .join("\n");
+}
+
+function formatProducts(products: Product[]): string {
+  return products
+    .map(
+      (product) =>
+        `- ${product.productCode ?? product.sku ?? product.name}${product.description ? ` - ${product.description}` : ""}${product.safetyStock != null ? ` - safety stock: ${product.safetyStock}` : ""}`,
+    )
+    .join("\n");
+}
+
+function formatInventoryItems(items: InventoryItem[]): string {
+  return items
+    .map(
+      (item) =>
+        `- ${item.partNumber ?? item.name}${item.location ? ` @ ${item.location}` : ""}${item.serialNumber ? ` - serial ${item.serialNumber}` : ""}${item.quantity != null ? ` - qty ${item.quantity}` : ""}`,
+    )
+    .join("\n");
+}
+
+function formatBuilds(builds: Build[]): string {
+  return builds
+    .map(
+      (build) =>
+        `- ${build.orderNumber ?? build.serialNumber ?? build.name}${build.model ? ` - ${build.model}` : ""}${build.status ? ` [${build.status}]` : ""}${build.deliverByDate ? ` - deliver by ${build.deliverByDate}` : ""}`,
+    )
+    .join("\n");
+}
+
+type InventoryRiskRow = {
+  part_number: string;
+  description: string | null;
+  on_hand: string;
+  safety_stock: string;
+  shortage: string;
+};
+
+type InventoryHealthSummary = {
+  totalParts: number;
+  lowStockParts: number;
+  zeroStockParts: number;
+  topRisk: Array<{
+    partNumber: string;
+    onHand: number;
+    safetyStock: number;
+    shortage: number;
+  }>;
+};
+
+type ForecastRow = {
+  part_number: string;
+  description: string | null;
+  required_qty: string;
+  on_hand: string;
+  shortage: string;
+  build_count: string;
+  model_count: string;
+};
+
+type BuildRequirementRow = {
+  part_number: string;
+  description: string | null;
+  required_qty: string;
+  on_hand: string;
+  shortage: string;
+};
+
+type AlignmentCountRow = {
+  total_walnut_builds: string;
+  linked_walnut_builds: string;
+  total_zoho_sales_orders: string;
+  linked_zoho_sales_orders: string;
+};
+
+type SampleBuildRow = {
+  name: string;
+  order_number: string | null;
+  model: string | null;
+  status: string | null;
+};
+
+type SampleOrderRow = {
+  subject: string;
+  order_number: string | null;
+  status: string | null;
+};
+
+const ACTIVE_BUILD_STATUSES = ["Pending", "Assembly", "Testing", "Ready To Pack"];
+
+async function getInventoryHealthSummary(): Promise<InventoryHealthSummary> {
+  type SummaryRow = {
+    total_parts: string;
+    low_stock_parts: string;
+    zero_stock_parts: string;
+  };
+
+  const [summaryResult, topRisk] = await Promise.all([
+    query<SummaryRow>(
+      `
+        WITH inventory AS (
+          SELECT
+            canonical_json->>'partNumber' AS part_number,
+            SUM(COALESCE((canonical_json->>'quantity')::numeric, 0)) AS on_hand,
+            MAX(COALESCE((canonical_json->>'safetyStock')::numeric, 0)) AS safety_stock
+          FROM ontology_entities
+          WHERE source = 'walnut'
+            AND entity_type = 'inventory_item'
+            AND canonical_json->>'partNumber' IS NOT NULL
+          GROUP BY canonical_json->>'partNumber'
+        )
+        SELECT
+          COUNT(*)::text AS total_parts,
+          COUNT(*) FILTER (WHERE on_hand <= safety_stock AND safety_stock > 0)::text AS low_stock_parts,
+          COUNT(*) FILTER (WHERE on_hand <= 0)::text AS zero_stock_parts
+        FROM inventory
+      `,
+    ),
+    listLowStockParts(5),
+  ]);
+
+  const row = summaryResult.rows[0];
+
+  return {
+    totalParts: Number(row?.total_parts ?? 0),
+    lowStockParts: Number(row?.low_stock_parts ?? 0),
+    zeroStockParts: Number(row?.zero_stock_parts ?? 0),
+    topRisk: topRisk.map((item) => ({
+      partNumber: item.partNumber,
+      onHand: item.onHand,
+      safetyStock: item.safetyStock,
+      shortage: item.shortage,
+    })),
+  };
+}
+
+async function listLowStockParts(limit: number): Promise<
+  Array<{
+    partNumber: string;
+    description: string | null;
+    onHand: number;
+    safetyStock: number;
+    shortage: number;
+  }>
+> {
+  const result = await query<InventoryRiskRow>(
+    `
+      WITH inventory AS (
+        SELECT
+          canonical_json->>'partNumber' AS part_number,
+          SUM(COALESCE((canonical_json->>'quantity')::numeric, 0)) AS on_hand,
+          MAX(COALESCE((canonical_json->>'safetyStock')::numeric, 0)) AS safety_stock
+        FROM ontology_entities
+        WHERE source = 'walnut'
+          AND entity_type = 'inventory_item'
+          AND canonical_json->>'partNumber' IS NOT NULL
+        GROUP BY canonical_json->>'partNumber'
+      )
+      SELECT
+        inventory.part_number,
+        product.canonical_json->>'description' AS description,
+        inventory.on_hand::text,
+        inventory.safety_stock::text,
+        GREATEST(inventory.safety_stock - inventory.on_hand, 0)::text AS shortage
+      FROM inventory
+      LEFT JOIN ontology_entities product
+        ON product.entity_id = 'walnut:part:' || inventory.part_number
+      WHERE inventory.on_hand <= inventory.safety_stock
+        AND inventory.safety_stock > 0
+      ORDER BY GREATEST(inventory.safety_stock - inventory.on_hand, 0) DESC,
+        inventory.part_number ASC
+      LIMIT $1
+    `,
+    [limit],
+  );
+
+  return result.rows.map((row) => ({
+    partNumber: row.part_number,
+    description: row.description,
+    onHand: Number(row.on_hand),
+    safetyStock: Number(row.safety_stock),
+    shortage: Number(row.shortage),
+  }));
+}
+
+async function forecastPartsForActiveBuilds(limit: number): Promise<
+  Array<{
+    partNumber: string;
+    description: string | null;
+    requiredQty: number;
+    onHand: number;
+    shortage: number;
+    buildCount: number;
+    modelCount: number;
+  }>
+> {
+  const result = await query<ForecastRow>(
+    `
+      WITH active_builds AS (
+        SELECT
+          payload->>'model' AS shop_product,
+          COUNT(*)::numeric AS build_count
+        FROM source_records
+        WHERE source = 'walnut'
+          AND source_module = 'builds'
+          AND COALESCE(payload->>'status', '') = ANY($1::text[])
+          AND payload->>'model' IS NOT NULL
+        GROUP BY payload->>'model'
+      ),
+      build_requirements AS (
+        SELECT
+          pb.payload->>'part_number' AS part_number,
+          SUM(active_builds.build_count * COALESCE((pb.payload->>'quantity')::numeric, 0)) AS required_qty,
+          SUM(active_builds.build_count) AS build_count,
+          COUNT(DISTINCT active_builds.shop_product) AS model_count
+        FROM active_builds
+        INNER JOIN source_records sm
+          ON sm.source = 'walnut'
+          AND sm.source_module = 'system_map'
+          AND sm.payload->>'shop_product' = active_builds.shop_product
+        INNER JOIN source_records pb
+          ON pb.source = 'walnut'
+          AND pb.source_module = 'part_bom'
+          AND pb.payload->>'bom_id' = sm.payload->>'bom_id'
+        GROUP BY pb.payload->>'part_number'
+      ),
+      inventory AS (
+        SELECT
+          canonical_json->>'partNumber' AS part_number,
+          SUM(COALESCE((canonical_json->>'quantity')::numeric, 0)) AS on_hand
+        FROM ontology_entities
+        WHERE source = 'walnut'
+          AND entity_type = 'inventory_item'
+          AND canonical_json->>'partNumber' IS NOT NULL
+        GROUP BY canonical_json->>'partNumber'
+      )
+      SELECT
+        build_requirements.part_number,
+        product.canonical_json->>'description' AS description,
+        build_requirements.required_qty::text,
+        COALESCE(inventory.on_hand, 0)::text AS on_hand,
+        GREATEST(build_requirements.required_qty - COALESCE(inventory.on_hand, 0), 0)::text AS shortage,
+        build_requirements.build_count::text,
+        build_requirements.model_count::text
+      FROM build_requirements
+      LEFT JOIN inventory
+        ON inventory.part_number = build_requirements.part_number
+      LEFT JOIN ontology_entities product
+        ON product.entity_id = 'walnut:part:' || build_requirements.part_number
+      ORDER BY shortage DESC, build_requirements.required_qty DESC, build_requirements.part_number ASC
+      LIMIT $2
+    `,
+    [ACTIVE_BUILD_STATUSES, limit],
+  );
+
+  return result.rows.map((row) => ({
+    partNumber: row.part_number,
+    description: row.description,
+    requiredQty: Number(row.required_qty),
+    onHand: Number(row.on_hand),
+    shortage: Number(row.shortage),
+    buildCount: Number(row.build_count),
+    modelCount: Number(row.model_count),
+  }));
+}
+
+async function getBuildRequirements(buildId: string): Promise<
+  | {
+      build: Build;
+      parts: Array<{
+        partNumber: string;
+        description: string | null;
+        requiredQty: number;
+        onHand: number;
+        shortage: number;
+      }>;
+    }
+  | null
+> {
+  const build = await store.getBuildById(buildId);
+
+  if (!build) {
+    return null;
+  }
+
+  if (!build.model) {
+    return {
+      build,
+      parts: [],
+    };
+  }
+
+  const result = await query<BuildRequirementRow>(
+    `
+      WITH build_bom AS (
+        SELECT
+          pb.payload->>'part_number' AS part_number,
+          COALESCE((pb.payload->>'quantity')::numeric, 0) AS required_qty
+        FROM source_records sm
+        INNER JOIN source_records pb
+          ON pb.source = 'walnut'
+          AND pb.source_module = 'part_bom'
+          AND pb.payload->>'bom_id' = sm.payload->>'bom_id'
+        WHERE sm.source = 'walnut'
+          AND sm.source_module = 'system_map'
+          AND sm.payload->>'shop_product' = $1
+      ),
+      inventory AS (
+        SELECT
+          canonical_json->>'partNumber' AS part_number,
+          SUM(COALESCE((canonical_json->>'quantity')::numeric, 0)) AS on_hand
+        FROM ontology_entities
+        WHERE source = 'walnut'
+          AND entity_type = 'inventory_item'
+          AND canonical_json->>'partNumber' IS NOT NULL
+        GROUP BY canonical_json->>'partNumber'
+      )
+      SELECT
+        build_bom.part_number,
+        product.canonical_json->>'description' AS description,
+        build_bom.required_qty::text,
+        COALESCE(inventory.on_hand, 0)::text AS on_hand,
+        GREATEST(build_bom.required_qty - COALESCE(inventory.on_hand, 0), 0)::text AS shortage
+      FROM build_bom
+      LEFT JOIN inventory
+        ON inventory.part_number = build_bom.part_number
+      LEFT JOIN ontology_entities product
+        ON product.entity_id = 'walnut:part:' || build_bom.part_number
+      ORDER BY shortage DESC, build_bom.required_qty DESC, build_bom.part_number ASC
+    `,
+    [build.model],
+  );
+
+  return {
+    build,
+    parts: result.rows.map((row) => ({
+      partNumber: row.part_number,
+      description: row.description,
+      requiredQty: Number(row.required_qty),
+      onHand: Number(row.on_hand),
+      shortage: Number(row.shortage),
+    })),
+  };
+}
+
+async function summarizeZohoWalnutAlignment(): Promise<{
+  totalWalnutBuilds: number;
+  linkedWalnutBuilds: number;
+  unlinkedWalnutBuilds: number;
+  totalZohoSalesOrders: number;
+  linkedZohoSalesOrders: number;
+  unlinkedZohoSalesOrders: number;
+  sampleUnlinkedBuilds: Array<{
+    name: string;
+    orderNumber: string | null;
+    model: string | null;
+    status: string | null;
+  }>;
+  sampleUnlinkedOrders: Array<{
+    subject: string;
+    orderNumber: string | null;
+    status: string | null;
+  }>;
+}> {
+  const relationTypes = ["fulfills_sales_order", "related_to"];
+  const [countResult, unlinkedBuildResult, unlinkedOrderResult] = await Promise.all([
+    query<AlignmentCountRow>(
+      `
+        WITH linked_builds AS (
+          SELECT DISTINCT relation.from_entity_id
+          FROM ontology_relations relation
+          WHERE relation.from_entity_type = 'build'
+            AND relation.to_entity_type = 'sales_order'
+            AND relation.relation_type = ANY($1::text[])
+        ),
+        linked_orders AS (
+          SELECT DISTINCT relation.to_entity_id
+          FROM ontology_relations relation
+          WHERE relation.from_entity_type = 'build'
+            AND relation.to_entity_type = 'sales_order'
+            AND relation.relation_type = ANY($1::text[])
+        )
+        SELECT
+          (SELECT COUNT(*)::text FROM ontology_entities WHERE source = 'walnut' AND entity_type = 'build') AS total_walnut_builds,
+          (SELECT COUNT(*)::text FROM linked_builds) AS linked_walnut_builds,
+          (SELECT COUNT(*)::text FROM ontology_entities WHERE source = 'zoho' AND entity_type = 'sales_order') AS total_zoho_sales_orders,
+          (SELECT COUNT(*)::text FROM linked_orders) AS linked_zoho_sales_orders
+      `,
+      [relationTypes],
+    ),
+    query<SampleBuildRow>(
+      `
+        WITH linked_builds AS (
+          SELECT DISTINCT relation.from_entity_id
+          FROM ontology_relations relation
+          WHERE relation.from_entity_type = 'build'
+            AND relation.to_entity_type = 'sales_order'
+            AND relation.relation_type = ANY($1::text[])
+        )
+        SELECT
+          canonical_json->>'name' AS name,
+          canonical_json->>'orderNumber' AS order_number,
+          canonical_json->>'model' AS model,
+          canonical_json->>'status' AS status
+        FROM ontology_entities
+        WHERE source = 'walnut'
+          AND entity_type = 'build'
+          AND entity_id NOT IN (SELECT from_entity_id FROM linked_builds)
+        ORDER BY entity_updated_at DESC NULLS LAST, last_synced_at DESC
+        LIMIT 5
+      `,
+      [relationTypes],
+    ),
+    query<SampleOrderRow>(
+      `
+        WITH linked_orders AS (
+          SELECT DISTINCT relation.to_entity_id
+          FROM ontology_relations relation
+          WHERE relation.from_entity_type = 'build'
+            AND relation.to_entity_type = 'sales_order'
+            AND relation.relation_type = ANY($1::text[])
+        )
+        SELECT
+          canonical_json->>'subject' AS subject,
+          canonical_json->>'orderNumber' AS order_number,
+          canonical_json->>'status' AS status
+        FROM ontology_entities
+        WHERE source = 'zoho'
+          AND entity_type = 'sales_order'
+          AND entity_id NOT IN (SELECT to_entity_id FROM linked_orders)
+        ORDER BY entity_updated_at DESC NULLS LAST, last_synced_at DESC
+        LIMIT 5
+      `,
+      [relationTypes],
+    ),
+  ]);
+
+  const counts = countResult.rows[0];
+  const totalWalnutBuilds = Number(counts?.total_walnut_builds ?? 0);
+  const linkedWalnutBuilds = Number(counts?.linked_walnut_builds ?? 0);
+  const totalZohoSalesOrders = Number(counts?.total_zoho_sales_orders ?? 0);
+  const linkedZohoSalesOrders = Number(counts?.linked_zoho_sales_orders ?? 0);
+
+  return {
+    totalWalnutBuilds,
+    linkedWalnutBuilds,
+    unlinkedWalnutBuilds: Math.max(totalWalnutBuilds - linkedWalnutBuilds, 0),
+    totalZohoSalesOrders,
+    linkedZohoSalesOrders,
+    unlinkedZohoSalesOrders: Math.max(
+      totalZohoSalesOrders - linkedZohoSalesOrders,
+      0,
+    ),
+    sampleUnlinkedBuilds: unlinkedBuildResult.rows.map((row) => ({
+      name: row.name,
+      orderNumber: row.order_number,
+      model: row.model,
+      status: row.status,
+    })),
+    sampleUnlinkedOrders: unlinkedOrderResult.rows.map((row) => ({
+      subject: row.subject,
+      orderNumber: row.order_number,
+      status: row.status,
+    })),
+  };
 }
