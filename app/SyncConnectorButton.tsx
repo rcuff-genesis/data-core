@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type SyncMode = "full" | "incremental";
 
@@ -31,11 +31,27 @@ export function SyncConnectorButton({
   const [activeMode, setActiveMode] = useState<SyncMode | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!syncStartedAt) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - syncStartedAt) / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [syncStartedAt]);
 
   async function handleSync(mode: SyncMode) {
     setActiveMode(mode);
     setMessage(null);
     setWarnings([]);
+    setSyncStartedAt(Date.now());
 
     try {
       const response = await fetch("/api/sync", {
@@ -64,6 +80,7 @@ export function SyncConnectorButton({
       setMessage(`${label} ${isWalnut ? "import" : `${mode} sync`} request failed.`);
     } finally {
       setActiveMode(null);
+      setSyncStartedAt(null);
     }
   }
 
@@ -104,6 +121,16 @@ export function SyncConnectorButton({
       {message && !isSyncing ? (
         <p className="rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm leading-6 text-stone-700">
           {message}
+        </p>
+      ) : null}
+
+      {isSyncing ? (
+        <p className="rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm leading-6 text-stone-700">
+          {isWalnut ? "Walnut import" : `${labelForMode(activeMode ?? "full")}`} is still running.
+          {elapsedSeconds > 0 ? ` Elapsed: ${elapsedSeconds}s.` : ""}
+          {elapsedSeconds >= 20
+            ? " Large syncs can take a while, especially full imports."
+            : ""}
         </p>
       ) : null}
 

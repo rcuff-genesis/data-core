@@ -179,6 +179,19 @@ export async function chatWithOllamaToolLoop(
         throw new Error("Ollama returned an empty response with no tool calls.");
       }
 
+      if (looksLikeToolNarration(content)) {
+        history.push({
+          role: "assistant",
+          content,
+        });
+        history.push({
+          role: "user",
+          content:
+            "Answer the original user question directly in plain English using the tool results already available. Do not mention tool calls, JSON, parameters, or internal reasoning.",
+        });
+        continue;
+      }
+
       return { answer: content, toolCallLog };
     }
 
@@ -217,5 +230,17 @@ export async function chatWithOllamaToolLoop(
 
   throw new Error(
     `Agent loop exceeded ${maxRounds} rounds without producing a final answer.`,
+  );
+}
+
+function looksLikeToolNarration(content: string): boolean {
+  const normalized = content.toLowerCase();
+
+  return (
+    normalized.includes("tool call") ||
+    normalized.includes("i will use the following tool") ||
+    normalized.includes('"name"') ||
+    normalized.includes('"parameters"') ||
+    /\{\s*"name"\s*:/.test(content)
   );
 }

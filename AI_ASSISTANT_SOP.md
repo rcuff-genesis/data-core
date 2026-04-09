@@ -60,6 +60,7 @@ Walnut import reads from Walnut Postgres and writes mapped records into the app 
 Examples:
 
 - `show walnut inventory health`
+- `how many active builds in walnut`
 - `list low stock walnut parts`
 - `forecast parts for active walnut builds`
 - `how well do walnut builds line up with zoho sales orders`
@@ -319,11 +320,14 @@ The assistant can currently help with:
 - Walnut parts lookup
 - Walnut inventory listing
 - Walnut inventory health summary
+- active Walnut build counts
 - low-stock parts
 - active-build part forecasting
 - per-build required parts
 - Walnut build lookup
 - Walnut to Zoho sales-order alignment summary
+- Zoho sales-order views that show linked Walnut builds
+- account views that show linked Walnut builds through Zoho sales orders
 
 ## Good Usage Examples
 

@@ -31,7 +31,19 @@ export async function POST(request: Request) {
     return Response.json({
       ok: true,
       plan,
-      result,
+      result: {
+        connector: result.connector,
+        mode: result.mode,
+        startedAt: result.startedAt,
+        completedAt: result.completedAt,
+        recordsFetched: result.recordsFetched,
+        recordsMapped: result.recordsMapped,
+        warnings: result.warnings,
+        syncRunId: result.syncRunId,
+        sourceRecordsPersisted: result.sourceRecordsPersisted,
+        entitiesPersisted: result.entitiesPersisted,
+        relationsPersisted: result.relationsPersisted,
+      },
     });
   } catch (error) {
     return Response.json(

@@ -29,6 +29,11 @@ export interface AgentRequestContext {
     rows: CountByFieldRow[];
     options: CountByFieldOptions;
   };
+  lastSalesBreakdown?: {
+    title: string;
+    labels: string[];
+    values: number[];
+  };
 }
 
 export function createAgentExecutor(ctx: AgentRequestContext) {
@@ -89,6 +94,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
             description:
               "Optional entity type filter: lead, contact, account, deal, sales_order, build, activity, document, campaign, product, inventory_item",
           },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 8)" },
         },
         required: ["query"],
@@ -106,6 +115,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         properties: {
           stage: { type: "string", description: "Lead lifecycle stage filter" },
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -122,6 +135,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         properties: {
           stage: { type: "string", description: "Deal stage filter" },
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -138,6 +155,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         properties: {
           status: { type: "string", description: "Customer status filter" },
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -150,6 +171,36 @@ export const AGENT_TOOLS: OllamaTool[] = [
       description:
         "Summarize Walnut inventory health across parts, on-hand counts, and safety-stock risk.",
       parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_sales_breakdown_by_source",
+      description:
+        "Break down synced sales orders by source system and year range using the local mapped database. Returns counts and total sales order amounts. Use this for requests like 'sales breakdown by system for 2025 to 2026'.",
+      parameters: {
+        type: "object",
+        properties: {
+          start_year: {
+            type: "number",
+            description: "Starting calendar year, for example 2025",
+          },
+          end_year: {
+            type: "number",
+            description: "Ending calendar year, for example 2026",
+          },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
+          metric: {
+            type: "string",
+            description: "Optional chart metric: amount or count. Defaults to amount.",
+          },
+        },
+        required: ["start_year", "end_year"],
+      },
     },
   },
   {
@@ -214,6 +265,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         type: "object",
         properties: {
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -229,6 +284,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         type: "object",
         properties: {
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -239,12 +298,33 @@ export const AGENT_TOOLS: OllamaTool[] = [
     function: {
       name: "list_builds",
       description:
-        "List Walnut builds. Filter by order number, serial number, model, or status keyword.",
+        "List builds sorted by most recent synced update first. Filter by order number, serial number, model, or status keyword. Use this for latest or most recent build questions.",
       parameters: {
         type: "object",
         properties: {
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "count_active_builds",
+      description:
+        "Count active builds from the synced ontology. For Walnut, active means Pending, Assembly, Testing, or Ready To Pack unless the user says otherwise.",
+      parameters: {
+        type: "object",
+        properties: {
+          source: {
+            type: "string",
+            description: "Optional source filter. Defaults to walnut.",
+          },
         },
       },
     },
@@ -258,6 +338,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         type: "object",
         properties: {
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -272,6 +356,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
         type: "object",
         properties: {
           search: { type: "string", description: "Keyword search" },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
+          },
           limit: { type: "number", description: "Max results (default 20)" },
         },
       },
@@ -290,6 +378,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
           period: {
             type: "string",
             description: "Optional time filter. Supported value: this_month",
+          },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
           },
           limit: { type: "number", description: "Max results (default 20)" },
         },
@@ -394,6 +486,10 @@ export const AGENT_TOOLS: OllamaTool[] = [
           status: {
             type: "string",
             description: "Optional status filter for entities that support status.",
+          },
+          source: {
+            type: "string",
+            description: "Optional source filter: zoho or walnut",
           },
           period: {
             type: "string",
@@ -530,7 +626,8 @@ export async function executeAgentTool(
       const limit = typeof args.limit === "number" ? Math.min(args.limit, 20) : 8;
       const entityType =
         typeof args.entity_type === "string" ? args.entity_type : undefined;
-      const results = await queryService.searchKnowledge(queryText, limit);
+      const source = resolveSourceArg(args.source);
+      const results = await queryService.searchKnowledge(queryText, limit, source);
       const filtered = entityType
         ? results.filter((result) => result.type === entityType)
         : results;
@@ -542,7 +639,7 @@ export async function executeAgentTool(
       return filtered
         .map(
           (result) =>
-            `[${result.type}] ${result.title} (id: ${result.id}) - ${result.snippet}`,
+            `[${result.type}/${result.source}] ${result.title} (id: ${result.id}) - ${result.snippet}`,
         )
         .join("\n");
     }
@@ -551,6 +648,7 @@ export async function executeAgentTool(
       const leads = await store.listLeads({
         stage: typeof args.stage === "string" ? args.stage : undefined,
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -565,6 +663,7 @@ export async function executeAgentTool(
       const deals = await store.listDeals({
         stage: typeof args.stage === "string" ? args.stage : undefined,
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -579,6 +678,7 @@ export async function executeAgentTool(
       const accounts = await store.listAccounts({
         status: typeof args.status === "string" ? args.status : undefined,
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -605,6 +705,54 @@ export async function executeAgentTool(
               .join("\n")}`
           : "Highest risk parts: none",
       ].join("\n");
+    }
+
+    case "get_sales_breakdown_by_source": {
+      const startYear = Number(args.start_year);
+      const endYear = Number(args.end_year);
+      const source = resolveSourceArg(args.source);
+      const metric =
+        args.metric === "count" || args.metric === "amount" ? args.metric : "amount";
+
+      if (!Number.isInteger(startYear) || !Number.isInteger(endYear)) {
+        return "Sales breakdown failed: start_year and end_year must be whole years.";
+      }
+
+      const breakdown = await getSalesBreakdownBySource({
+        startYear,
+        endYear,
+        source,
+      });
+
+      if (breakdown.rows.length === 0) {
+        return `No sales-order data was found for ${source ?? "the synced systems"} in ${startYear}${endYear !== startYear ? ` to ${endYear}` : ""}.`;
+      }
+
+      if (ctx) {
+        ctx.lastSalesBreakdown = {
+          title:
+            metric === "count"
+              ? `Sales order count by source (${startYear}${endYear !== startYear ? `-${endYear}` : ""})`
+              : `Sales order amount by source (${startYear}${endYear !== startYear ? `-${endYear}` : ""})`,
+          labels: breakdown.rows.map((row) => `${row.year} ${row.source}`),
+          values: breakdown.rows.map((row) =>
+            metric === "count" ? row.orderCount : row.totalAmount,
+          ),
+        };
+      }
+
+      return [
+        `Sales order breakdown for ${source ?? "all synced systems"} from ${startYear}${endYear !== startYear ? ` to ${endYear}` : ""}:`,
+        ...breakdown.rows.map(
+          (row) =>
+            `- ${row.year} ${row.source}: ${row.orderCount} orders, total ${row.totalAmount.toFixed(2)}`,
+        ),
+        breakdown.sourcesWithoutSales.length
+          ? `Sources with no sales-order totals in this range: ${breakdown.sourcesWithoutSales.join(", ")}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
     }
 
     case "list_low_stock_parts": {
@@ -706,6 +854,7 @@ export async function executeAgentTool(
     case "list_products": {
       const products = await store.listProducts({
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -719,6 +868,7 @@ export async function executeAgentTool(
     case "list_inventory_items": {
       const inventoryItems = await store.listInventoryItems({
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -732,6 +882,7 @@ export async function executeAgentTool(
     case "list_builds": {
       const builds = await store.listBuilds({
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -742,9 +893,20 @@ export async function executeAgentTool(
       return `Found ${builds.length} builds:\n${formatBuilds(builds)}`;
     }
 
+    case "count_active_builds": {
+      const source = resolveSourceArg(args.source) ?? "walnut";
+      const summary = await countActiveBuilds(source);
+
+      return [
+        `Active builds in ${summary.source}: ${summary.count}`,
+        `Active statuses used: ${summary.activeStatuses.join(", ")}`,
+      ].join("\n");
+    }
+
     case "list_contacts": {
       const contacts = await store.listContacts({
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -758,6 +920,7 @@ export async function executeAgentTool(
     case "list_activities": {
       const activities = await store.listActivities({
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
 
@@ -771,6 +934,7 @@ export async function executeAgentTool(
     case "list_sales_orders": {
       const salesOrders = await store.listSalesOrders({
         search: typeof args.search === "string" ? args.search : undefined,
+        source: resolveSourceArg(args.source),
         period: args.period === "this_month" ? "this_month" : undefined,
         limit: typeof args.limit === "number" ? args.limit : undefined,
       });
@@ -851,7 +1015,7 @@ export async function executeAgentTool(
         return `Account not found: ${id}`;
       }
 
-      const { account, contacts, deals, salesOrders, recentActivities } =
+      const { account, contacts, deals, salesOrders, linkedBuilds, recentActivities } =
         accountContext;
 
       return [
@@ -861,6 +1025,7 @@ export async function executeAgentTool(
         `Contacts: ${contacts.length}${contacts.length ? ` - ${contacts.slice(0, 3).map((contact) => contact.fullName).join(", ")}` : ""}`,
         `Deals: ${deals.length}${deals.length ? ` - ${deals.slice(0, 3).map((deal) => `${deal.name} (${deal.stage})`).join(", ")}` : ""}`,
         `Sales orders: ${salesOrders.length}`,
+        `Linked Walnut builds: ${linkedBuilds.length}${linkedBuilds.length ? ` - ${linkedBuilds.slice(0, 3).map((build) => build.orderNumber ?? build.name).join(", ")}` : ""}`,
         `Recent activities: ${recentActivities.length}`,
       ]
         .filter(Boolean)
@@ -897,11 +1062,13 @@ export async function executeAgentTool(
 
     case "get_sales_order": {
       const id = String(args.id ?? "");
-      const salesOrder = await queryService.getSalesOrder(id);
+      const salesOrderContext = await queryService.getSalesOrderContext(id);
 
-      if (!salesOrder) {
+      if (!salesOrderContext) {
         return `Sales order not found: ${id}`;
       }
+
+      const { salesOrder, linkedBuilds } = salesOrderContext;
 
       return [
         `Order: ${salesOrder.subject} (${salesOrder.id})`,
@@ -909,6 +1076,7 @@ export async function executeAgentTool(
         salesOrder.totalAmount != null
           ? `Total: ${salesOrder.totalAmount}${salesOrder.currency ? ` ${salesOrder.currency}` : ""}`
           : null,
+        `Linked Walnut builds: ${linkedBuilds.length}${linkedBuilds.length ? ` - ${linkedBuilds.slice(0, 3).map((build) => build.orderNumber ?? build.name).join(", ")}` : ""}`,
         `Line items: ${salesOrder.orderedItems.length}`,
         ...salesOrder.orderedItems.slice(0, 5).map(
           (item) =>
@@ -925,6 +1093,7 @@ export async function executeAgentTool(
       const options: CountByFieldOptions = {
         stage: typeof args.stage === "string" ? args.stage : undefined,
         status: typeof args.status === "string" ? args.status : undefined,
+        source: resolveSourceArg(args.source),
         period: args.period === "this_month" ? "this_month" : undefined,
       };
       const counts = await store.countByField(entityType, field, options);
@@ -946,6 +1115,7 @@ export async function executeAgentTool(
       const qualifiers = [
         options.stage ? `stage=${options.stage}` : null,
         options.status ? `status=${options.status}` : null,
+        options.source ? `source=${options.source}` : null,
         options.period ? `period=${options.period}` : null,
       ]
         .filter(Boolean)
@@ -1071,9 +1241,42 @@ function formatBuilds(builds: Build[]): string {
   return builds
     .map(
       (build) =>
-        `- ${build.orderNumber ?? build.serialNumber ?? build.name}${build.model ? ` - ${build.model}` : ""}${build.status ? ` [${build.status}]` : ""}${build.deliverByDate ? ` - deliver by ${build.deliverByDate}` : ""}`,
+        [
+          `- ${build.orderNumber ?? build.serialNumber ?? build.name}`,
+          build.name &&
+          build.name !== build.orderNumber &&
+          build.name !== build.serialNumber
+            ? `  name: ${build.name}`
+            : null,
+          build.serialNumber ? `  serial: ${build.serialNumber}` : null,
+          build.model ? `  model: ${build.model}` : null,
+          build.status ? `  status: ${build.status}` : null,
+          build.startTime ? `  started: ${build.startTime}` : null,
+          build.expectedDate ? `  expected: ${build.expectedDate}` : null,
+          build.deliverByDate ? `  deliver by: ${build.deliverByDate}` : null,
+          build.shippingState ? `  ship state: ${build.shippingState}` : null,
+          build.shippingCountry ? `  ship country: ${build.shippingCountry}` : null,
+          build.bomVersion ? `  bom version: ${build.bomVersion}` : null,
+          build.id ? `  id: ${build.id}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
     )
     .join("\n");
+}
+
+function resolveSourceArg(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "walnut" || normalized === "zoho") {
+    return normalized;
+  }
+
+  return undefined;
 }
 
 type InventoryRiskRow = {
@@ -1114,6 +1317,13 @@ type BuildRequirementRow = {
   shortage: string;
 };
 
+type SalesBreakdownRow = {
+  source: string;
+  sales_year: string;
+  order_count: string;
+  total_amount: string;
+};
+
 type AlignmentCountRow = {
   total_walnut_builds: string;
   linked_walnut_builds: string;
@@ -1132,6 +1342,10 @@ type SampleOrderRow = {
   subject: string;
   order_number: string | null;
   status: string | null;
+};
+
+type ActiveBuildCountRow = {
+  count: string;
 };
 
 const ACTIVE_BUILD_STATUSES = ["Pending", "Assembly", "Testing", "Ready To Pack"];
@@ -1179,6 +1393,74 @@ async function getInventoryHealthSummary(): Promise<InventoryHealthSummary> {
       safetyStock: item.safetyStock,
       shortage: item.shortage,
     })),
+  };
+}
+
+async function getSalesBreakdownBySource(input: {
+  startYear: number;
+  endYear: number;
+  source?: string;
+}): Promise<{
+  rows: Array<{
+    source: string;
+    year: number;
+    orderCount: number;
+    totalAmount: number;
+  }>;
+  sourcesWithoutSales: string[];
+}> {
+  const startYear = Math.min(input.startYear, input.endYear);
+  const endYear = Math.max(input.startYear, input.endYear);
+  const sources = input.source ? [input.source] : ["zoho", "walnut"];
+  const result = await query<SalesBreakdownRow>(
+    `
+      WITH years AS (
+        SELECT generate_series($1::int, $2::int) AS sales_year
+      ),
+      sources AS (
+        SELECT unnest($3::text[]) AS source
+      ),
+      sales AS (
+        SELECT
+          source,
+          EXTRACT(YEAR FROM COALESCE(entity_created_at, entity_updated_at, created_at))::int AS sales_year,
+          COUNT(*)::text AS order_count,
+          COALESCE(SUM(COALESCE((canonical_json->>'totalAmount')::numeric, 0)), 0)::text AS total_amount
+        FROM ontology_entities
+        WHERE entity_type = 'sales_order'
+          AND source = ANY($3::text[])
+          AND EXTRACT(YEAR FROM COALESCE(entity_created_at, entity_updated_at, created_at))::int BETWEEN $1 AND $2
+        GROUP BY source, EXTRACT(YEAR FROM COALESCE(entity_created_at, entity_updated_at, created_at))::int
+      )
+      SELECT
+        sources.source,
+        years.sales_year::text AS sales_year,
+        COALESCE(sales.order_count, '0') AS order_count,
+        COALESCE(sales.total_amount, '0') AS total_amount
+      FROM sources
+      CROSS JOIN years
+      LEFT JOIN sales
+        ON sales.source = sources.source
+        AND sales.sales_year = years.sales_year
+      ORDER BY years.sales_year ASC, sources.source ASC
+    `,
+    [startYear, endYear, sources],
+  );
+
+  const rows = result.rows.map((row) => ({
+    source: row.source,
+    year: Number(row.sales_year),
+    orderCount: Number(row.order_count),
+    totalAmount: Number(row.total_amount),
+  }));
+
+  const sourcesWithoutSales = sources.filter(
+    (source) => !rows.some((row) => row.source === source && row.orderCount > 0),
+  );
+
+  return {
+    rows,
+    sourcesWithoutSales,
   };
 }
 
@@ -1510,5 +1792,32 @@ async function summarizeZohoWalnutAlignment(): Promise<{
       orderNumber: row.order_number,
       status: row.status,
     })),
+  };
+}
+
+async function countActiveBuilds(source: string): Promise<{
+  source: string;
+  count: number;
+  activeStatuses: string[];
+}> {
+  const activeStatuses = source === "walnut" ? ACTIVE_BUILD_STATUSES : [];
+  const result = await query<ActiveBuildCountRow>(
+    `
+      SELECT COUNT(*)::text AS count
+      FROM ontology_entities
+      WHERE entity_type = 'build'
+        AND source = $1
+        AND (
+          $2::text[] = '{}'::text[]
+          OR COALESCE(canonical_json->>'status', '') = ANY($2::text[])
+        )
+    `,
+    [source, activeStatuses],
+  );
+
+  return {
+    source,
+    count: Number(result.rows[0]?.count ?? 0),
+    activeStatuses,
   };
 }

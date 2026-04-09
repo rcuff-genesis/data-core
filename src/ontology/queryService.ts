@@ -35,6 +35,7 @@ type SyncRunRow = {
 type SearchEntityRow = {
   entity_id: string;
   entity_type: string;
+  source: string;
   canonical_json: Record<string, unknown>;
   entity_updated_at: string | null;
 };
@@ -48,6 +49,7 @@ type GraphNeighborRow = {
   relation_type: RelationType;
   related_entity_id: string;
   related_entity_type: string;
+  source: string;
   canonical_json: Record<string, unknown>;
   entity_updated_at: string | null;
 };
@@ -66,6 +68,7 @@ export interface AccountContext {
   contacts: Contact[];
   deals: Deal[];
   salesOrders: SalesOrderReadModel[];
+  linkedBuilds: Build[];
   recentActivities: Activity[];
 }
 
@@ -75,6 +78,11 @@ export interface DealContext {
   contact: Contact | null;
   salesOrders: SalesOrderReadModel[];
   recentActivities: Activity[];
+}
+
+export interface SalesOrderContext {
+  salesOrder: SalesOrderReadModel;
+  linkedBuilds: Build[];
 }
 
 export interface OntologyStatusSummary {
@@ -98,6 +106,7 @@ export interface OntologyStatusSummary {
 export interface KnowledgeSearchResult {
   id: string;
   type: string;
+  source: string;
   title: string;
   snippet: string;
   updatedAt: string | null;
@@ -172,7 +181,8 @@ export class OntologyQueryService {
       return null;
     }
 
-    const [contacts, deals, salesOrders, recentActivities] = await Promise.all([
+    const [contacts, deals, salesOrders, linkedBuilds, recentActivities] =
+      await Promise.all([
       this.entityStore.getEntitiesRelatedToTarget<Contact>({
         targetEntityId: accountId,
         relationType: "belongs_to_account",
@@ -184,18 +194,20 @@ export class OntologyQueryService {
         sourceEntityType: "deal",
       }),
       this.entityStore.getSalesOrdersForAccount(accountId),
+      this.entityStore.getBuildsForAccount(accountId),
       this.entityStore.getRelatedActivities({
         entityId: accountId,
         entityType: "account",
         limit: 10,
       }),
-    ]);
+      ]);
 
     return {
       account,
       contacts,
       deals,
       salesOrders,
+      linkedBuilds,
       recentActivities,
     };
   }
@@ -235,6 +247,24 @@ export class OntologyQueryService {
     return this.entityStore.getSalesOrderById(salesOrderId);
   }
 
+  async getSalesOrderContext(
+    salesOrderId: string,
+  ): Promise<SalesOrderContext | null> {
+    const [salesOrder, linkedBuilds] = await Promise.all([
+      this.entityStore.getSalesOrderById(salesOrderId),
+      this.entityStore.getBuildsForSalesOrder(salesOrderId),
+    ]);
+
+    if (!salesOrder) {
+      return null;
+    }
+
+    return {
+      salesOrder,
+      linkedBuilds,
+    };
+  }
+
   async getBuild(buildId: string): Promise<Build | null> {
     return this.entityStore.getBuildById(buildId);
   }
@@ -246,19 +276,31 @@ export class OntologyQueryService {
   async searchKnowledge(
     queryText: string,
     limit = 6,
+    source?: string,
   ): Promise<KnowledgeSearchResult[]> {
     const normalizedLimit = Math.max(1, Math.min(limit, 12));
     const searchTerm = `%${queryText}%`;
     const exactTerm = queryText.trim().toLowerCase();
+    const params: unknown[] = [
+      searchTerm,
+      normalizedLimit,
+      exactTerm,
+      `${exactTerm}%`,
+    ];
+    const sourceCondition = source
+      ? `AND source = $${params.push(source)}`
+      : "";
     const result = await query<SearchEntityRow>(
       `
         SELECT
           entity_id,
           entity_type,
+          source,
           canonical_json,
           entity_updated_at
         FROM ontology_entities
         WHERE canonical_json::text ILIKE $1
+          ${sourceCondition}
         ORDER BY
           CASE
             WHEN LOWER(COALESCE(canonical_json->>'name', canonical_json->>'subject', canonical_json->>'fullName', canonical_json->>'title', canonical_json->>'orderNumber', canonical_json->>'serialNumber', canonical_json->>'partNumber', canonical_json->>'sku', canonical_json->>'productCode', '')) = $3 THEN 0
@@ -269,12 +311,13 @@ export class OntologyQueryService {
           last_synced_at DESC
         LIMIT $2
       `,
-      [searchTerm, normalizedLimit, exactTerm, `${exactTerm}%`],
+      params,
     );
 
     return result.rows.map((row) => ({
       id: row.entity_id,
       type: row.entity_type,
+      source: row.source,
       title: resolveEntityTitle(row.entity_type, row.canonical_json),
       snippet: buildSnippet(row.canonical_json),
       updatedAt: row.entity_updated_at,
@@ -295,7 +338,8 @@ export class OntologyQueryService {
               'converted_to_contact',
               'converted_to_account',
               'converted_to_deal',
-              'results_in_sales_order'
+              'results_in_sales_order',
+              'fulfills_sales_order'
             )
             GROUP BY relation_type
             ORDER BY relation_type ASC
@@ -332,6 +376,7 @@ export class OntologyQueryService {
             relation.relation_type,
             target.entity_id AS related_entity_id,
             target.entity_type AS related_entity_type,
+            target.source AS source,
             target.canonical_json,
             target.entity_updated_at
           FROM ontology_relations relation
@@ -349,6 +394,7 @@ export class OntologyQueryService {
             relation.relation_type,
             source.entity_id AS related_entity_id,
             source.entity_type AS related_entity_type,
+            source.source AS source,
             source.canonical_json,
             source.entity_updated_at
           FROM ontology_relations relation
@@ -383,6 +429,7 @@ export class OntologyQueryService {
         SELECT
           entity_id,
           entity_type,
+          source,
           canonical_json,
           entity_updated_at
         FROM ontology_entities
@@ -469,6 +516,7 @@ function mapKnowledgeResultRow(
     | {
         related_entity_id: string;
         related_entity_type: string;
+        source?: string;
         canonical_json: Record<string, unknown>;
         entity_updated_at: string | null;
       },
@@ -476,10 +524,12 @@ function mapKnowledgeResultRow(
   const id = "entity_id" in row ? row.entity_id : row.related_entity_id;
   const type =
     "entity_type" in row ? row.entity_type : row.related_entity_type;
+  const source = row.source ?? "unknown";
 
   return {
     id,
     type,
+    source,
     title: resolveEntityTitle(type, row.canonical_json),
     snippet: buildSnippet(row.canonical_json),
     updatedAt: row.entity_updated_at,
@@ -564,6 +614,8 @@ declare module "../storage/postgresEntityStore" {
     getRelatedActivities(input: RelatedActivityInput): Promise<Activity[]>;
     getSalesOrdersForDeal(dealId: string): Promise<SalesOrderReadModel[]>;
     getSalesOrdersForAccount(accountId: string): Promise<SalesOrderReadModel[]>;
+    getBuildsForSalesOrder(salesOrderId: string): Promise<Build[]>;
+    getBuildsForAccount(accountId: string): Promise<Build[]>;
     getEntitiesRelatedToTarget<T>(input: RelatedToTargetInput): Promise<T[]>;
     getEntitiesRelatedFromSource<T>(input: {
       sourceEntityId: string;

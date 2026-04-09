@@ -21,6 +21,7 @@ export interface ListOptions {
   stage?: string;
   status?: string;
   search?: string;
+  source?: string;
   limit?: number;
   period?: "this_month";
 }
@@ -33,6 +34,7 @@ export interface CountByFieldRow {
 export interface CountByFieldOptions {
   stage?: string;
   status?: string;
+  source?: string;
   period?: "this_month";
 }
 
@@ -175,6 +177,34 @@ export class PostgresEntityStore implements EntityStore {
     return hydrateSalesOrders(this, salesOrders.map((salesOrder) => salesOrder.id));
   }
 
+  async getBuildsForSalesOrder(salesOrderId: string): Promise<Build[]> {
+    return this.getEntitiesRelatedToTarget<Build>({
+      targetEntityId: salesOrderId,
+      relationType: "fulfills_sales_order",
+      sourceEntityType: "build",
+    });
+  }
+
+  async getBuildsForAccount(accountId: string): Promise<Build[]> {
+    const salesOrders = await this.getSalesOrdersForAccount(accountId);
+
+    if (salesOrders.length === 0) {
+      return [];
+    }
+
+    const builds = await Promise.all(
+      salesOrders.map((salesOrder) => this.getBuildsForSalesOrder(salesOrder.id)),
+    );
+
+    const uniqueBuilds = new Map<string, Build>();
+
+    for (const build of builds.flat()) {
+      uniqueBuilds.set(build.id, build);
+    }
+
+    return [...uniqueBuilds.values()];
+  }
+
   async getEntitiesRelatedToTarget<T extends { id: string }>(input: {
     targetEntityId: string;
     relationType: RelationType;
@@ -283,6 +313,11 @@ export class PostgresEntityStore implements EntityStore {
     if (opts.status) {
       params.push(opts.status);
       conditions.push(`canonical_json->>'status' = $${params.length}`);
+    }
+
+    if (opts.source) {
+      params.push(opts.source);
+      conditions.push(`source = $${params.length}`);
     }
 
     if (opts.period === "this_month") {
@@ -413,6 +448,11 @@ async function listEntities<T>(
   if (opts.status) {
     params.push(opts.status);
     conditions.push(`canonical_json->>'status' = $${params.length}`);
+  }
+
+  if (opts.source) {
+    params.push(opts.source);
+    conditions.push(`source = $${params.length}`);
   }
 
   if (opts.search) {

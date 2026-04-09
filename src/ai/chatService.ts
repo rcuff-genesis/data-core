@@ -4,6 +4,7 @@ import { chatWithOllamaToolLoop } from "./ollama";
 import {
   AGENT_TOOLS,
   createAgentExecutor,
+  executeAgentTool,
   type AgentRequestContext,
 } from "./agentTools";
 import {
@@ -56,6 +57,12 @@ export async function answerDataQuestion(
     return commandResponse;
   }
 
+  const shortcutResponse = await handleStructuredQuestion(latestUserMessage.content);
+
+  if (shortcutResponse) {
+    return shortcutResponse;
+  }
+
   const clarificationQuestion = buildClarificationQuestion(
     conversation,
     latestUserMessage.content,
@@ -92,7 +99,11 @@ export async function answerDataQuestion(
 
   const chart =
     agentCtx.chart ??
-    buildFallbackChart(latestUserMessage.content, agentCtx.lastCountByField);
+    buildFallbackChart(
+      latestUserMessage.content,
+      agentCtx.lastCountByField,
+      agentCtx.lastSalesBreakdown,
+    );
 
   if (/i don't have that data/i.test(answer)) {
     return {
@@ -103,6 +114,78 @@ export async function answerDataQuestion(
   }
 
   return { answer, toolCallLog, chart };
+}
+
+async function handleStructuredQuestion(
+  latestUserMessage: string,
+): Promise<ChatResponse | null> {
+  const normalized = normalizeMessage(latestUserMessage);
+
+  if (!looksLikeSalesBreakdownQuestion(normalized)) {
+    return null;
+  }
+
+  const yearRange = extractYearRange(normalized);
+
+  if (!yearRange) {
+    return null;
+  }
+
+  const source =
+    normalized.includes("zoho") ? "zoho" : normalized.includes("walnut") ? "walnut" : undefined;
+  const metric = /\b(count|counts|number of orders)\b/.test(normalized)
+    ? "count"
+    : "amount";
+  const chartIntent = hasChartIntent(normalized);
+  const agentCtx: AgentRequestContext = {};
+  const executor = createAgentExecutor(agentCtx);
+  const args = {
+    start_year: yearRange.startYear,
+    end_year: yearRange.endYear,
+    source,
+    metric,
+  };
+  const answer = await executeAgentTool(
+    "get_sales_breakdown_by_source",
+    args,
+    agentCtx,
+  );
+  const toolCallLog: ToolCallLogEntry[] = [
+    {
+      tool: "get_sales_breakdown_by_source",
+      args,
+      resultSummary: answer.slice(0, 200),
+    },
+  ];
+
+  if (chartIntent && agentCtx.lastSalesBreakdown) {
+    await executor("generate_chart", {
+      type: inferChartType(normalized),
+      title: agentCtx.lastSalesBreakdown.title,
+      labels: agentCtx.lastSalesBreakdown.labels,
+      values: agentCtx.lastSalesBreakdown.values,
+    });
+    toolCallLog.push({
+      tool: "generate_chart",
+      args: {
+        type: inferChartType(normalized),
+        title: agentCtx.lastSalesBreakdown.title,
+      },
+      resultSummary: "Chart ready",
+    });
+  }
+
+  return {
+    answer,
+    toolCallLog,
+    chart:
+      agentCtx.chart ??
+      buildFallbackChart(
+        latestUserMessage,
+        agentCtx.lastCountByField,
+        agentCtx.lastSalesBreakdown,
+      ),
+  };
 }
 
 function buildSystemPrompt(
@@ -116,7 +199,7 @@ function buildSystemPrompt(
 
   return [
     `You are Data Core AI. Today is ${today}.`,
-    "You have tools to query a business ontology database (Zoho CRM data synced to Postgres).",
+    "You have tools to query a business ontology database with synced Zoho and Walnut data stored in Postgres.",
     "Entity types: lead, contact, account, deal, sales_order, build, product, inventory_item, activity, campaign, document.",
     "The database supports this_month filtering for lists and grouped counts using stored entity timestamps.",
     "",
@@ -125,25 +208,33 @@ function buildSystemPrompt(
     "## Rules - follow these exactly:",
     "1. Call a tool before every data-backed answer. If the user's request is too ambiguous to choose the right tool or filter, ask one short clarifying question first.",
     "2. After getting tool results, answer in plain English. Do NOT repeat JSON or code.",
+    "2a. Never mention tool names, tool calls, parameters, raw JSON, or say that you are about to use a tool.",
     "3. State exact numbers from the tool results. Do not estimate or approximate.",
     "4. If data is not in the tool result, say 'I don't have that data' and do not invent it.",
     "5. For broad business or pipeline questions, start with get_funnel_summary.",
     "6. For counts or totals use get_ontology_status or count_by_field.",
-    "7. For lists use list_leads, list_deals, list_accounts, list_contacts, list_products, list_inventory_items, list_builds, list_activities, or list_sales_orders.",
-    "8. For name lookups use search_entities. If there are multiple plausible matches, ask the user which one they mean. If a single result matters, follow up with get_lead, get_account, get_deal, get_sales_order, or explore_entity_graph.",
+    "7. For lists use list_leads, list_deals, list_accounts, list_contacts, list_products, list_inventory_items, list_builds, list_activities, or list_sales_orders. If the user says Walnut or Zoho, pass the matching source filter.",
+    "8. For name lookups use search_entities. If the user says Walnut or Zoho, pass the matching source filter. If there are multiple plausible matches, ask the user which one they mean. If a single result matters, follow up with get_lead, get_account, get_deal, get_sales_order, or explore_entity_graph.",
     "9. For open-ended relationship questions, use explore_entity_graph to traverse the ontology relations.",
     "10. For breakdowns (X by Y) use count_by_field and pass filters when needed.",
     "11. If the user asks for a chart, graph, visual, breakdown, or distribution, call generate_chart after you have numeric results.",
     "12. For sales-order questions about this month, use list_sales_orders or count_by_field with period='this_month'.",
-    "13. For Walnut inventory-health or shortage questions, use get_inventory_health_summary or list_low_stock_parts.",
+    "12a. For sales-order breakdowns by year, year range, or source system, use get_sales_breakdown_by_source.",
+    "12b. Do not use source-system breakdown tools to answer product-model questions like WC-10, WC-100, or WC-1000.",
+    "12c. If the user asks about a specific model or spec and the metric is unclear, ask whether they want distinct sales orders, revenue amount, or units before answering.",
+    "13. For Walnut inventory-health or shortage questions, use get_inventory_health_summary or list_low_stock_parts. If the user asks which parts are the issue, prefer list_low_stock_parts so you can name the parts and shortages.",
     "14. For Walnut forecasting, parts planning, or build-demand questions, use forecast_parts_for_active_builds.",
     "15. For one Walnut build's materials or shortages, use get_build_requirements.",
-    "16. For questions about Walnut builds matched to Zoho sales orders, use summarize_zoho_walnut_alignment or explore_entity_graph.",
-    "17. The database does not support arbitrary natural-language time ranges like 'past week' unless a tool explicitly supports them.",
-    "18. If the user asks for a time range the tools do not support, ask them to choose between a supported filter or the full synced dataset.",
-    "19. If the user asks for rankings like 'top' or 'best' and the metric is unclear, ask what metric they want.",
-    "20. If the user asks for closed leads, interpret that as terminal lead stages and be explicit about the filter you chose.",
-    "21. Keep clarifying questions short, ask only one at a time, and keep answers short and direct.",
+    "16. For active Walnut build count questions, use count_active_builds with source='walnut'.",
+    "17. For questions about Walnut builds matched to Zoho sales orders, use summarize_zoho_walnut_alignment, get_sales_order, get_account, or explore_entity_graph.",
+    "17a. For requests like 'top 5 most recent builds' or 'latest orders', use the matching list tool with the limit requested. Do not use count_by_field for those.",
+    "17b. If the user replies with only a ranking metric like 'most recent', apply it to the most recently discussed entity set.",
+    "17c. If the user asks for 'all info', 'full info', or 'details', include the concrete record fields returned by the tool, not just a summary count.",
+    "18. The database does not support arbitrary natural-language time ranges like 'past week' unless a tool explicitly supports them.",
+    "19. If the user asks for a time range the tools do not support, ask them to choose between a supported filter or the full synced dataset.",
+    "20. If the user asks for rankings like 'top' or 'best' and the metric is unclear, ask what metric they want.",
+    "21. If the user asks for closed leads, interpret that as terminal lead stages and be explicit about the filter you chose.",
+    "22. Keep clarifying questions short, ask only one at a time, and keep answers short and direct.",
     ...(learnedRuleLines.length
       ? [
           "",
@@ -335,7 +426,7 @@ const ENTITY_PATTERNS: Array<{ key: string; pattern: RegExp }> = [
   { key: "deal", pattern: /\bdeals?\b/ },
   { key: "account", pattern: /\baccounts?\b|\bcompanies?\b|\bcustomers?\b/ },
   { key: "contact", pattern: /\bcontacts?\b|\bpeople\b/ },
-  { key: "sales_order", pattern: /\bsales orders?\b|\borders?\b/ },
+  { key: "sales_order", pattern: /\bsales orders?\b|\bsales\b|\borders?\b|\brevenue\b/ },
   { key: "build", pattern: /\bbuilds?\b/ },
   { key: "product", pattern: /\bproducts?\b|\bparts?\b|\bskus?\b/ },
   {
@@ -367,6 +458,24 @@ function buildClarificationQuestion(
   const recentContextEntity = findRecentContextEntity(conversation.slice(0, -1));
   const hasEntityContext =
     currentEntities.size > 0 || recentContextEntity !== null;
+  const recentSalesContext = hasRecentSalesContext(conversation.slice(0, -1));
+  const recentSource = findRecentSourceMention(conversation.slice(0, -1));
+  const modelCodes = extractModelCodes(normalized);
+
+  if (
+    modelCodes.length > 0 &&
+    (currentEntities.has("sales_order") || recentSalesContext || /\b(same|do the same)\b/.test(normalized))
+  ) {
+    const modelLabel = modelCodes.join(" vs ");
+
+    if (!/\b(amount|revenue|value|count|orders?|units?)\b/.test(normalized)) {
+      return `For ${modelLabel}, do you want distinct sales orders, revenue amount, or units?`;
+    }
+
+    if (!/\bzoho|walnut|both\b/.test(normalized) && !recentSource) {
+      return `Should I use Zoho only, Walnut only, or both for ${modelLabel}?`;
+    }
+  }
 
   if (
     UNSUPPORTED_TIME_RANGE_PATTERN.test(normalized) &&
@@ -442,6 +551,36 @@ function extractEntities(message: string): Set<string> {
   return entities;
 }
 
+function extractModelCodes(message: string): string[] {
+  return [...message.matchAll(/\bwc[- ]?\d{1,4}[a-z0-9-]*\b/gi)].map((match) =>
+    match[0].toUpperCase().replace(" ", "-"),
+  );
+}
+
+function looksLikeSalesBreakdownQuestion(message: string): boolean {
+  return (
+    /\bsales\b|\bsales orders?\b|\brevenue\b/.test(message) &&
+    /\b(system|source|sources|breakdown|compare|comparison)\b/.test(message)
+  );
+}
+
+function extractYearRange(
+  message: string,
+): { startYear: number; endYear: number } | null {
+  const matches = [...message.matchAll(/\b(20\d{2})\b/g)].map((match) =>
+    Number(match[1]),
+  );
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  return {
+    startYear: matches[0],
+    endYear: matches[matches.length - 1],
+  };
+}
+
 function findRecentContextEntity(conversation: ChatMessage[]): string | null {
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
     const entities = extractEntities(normalizeMessage(conversation[index].content));
@@ -449,6 +588,28 @@ function findRecentContextEntity(conversation: ChatMessage[]): string | null {
 
     if (entity) {
       return entity;
+    }
+  }
+
+  return null;
+}
+
+function hasRecentSalesContext(conversation: ChatMessage[]): boolean {
+  return conversation.some((message) =>
+    /\bsales\b|\bsales orders?\b|\brevenue\b/i.test(message.content),
+  );
+}
+
+function findRecentSourceMention(conversation: ChatMessage[]): string | null {
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    const content = conversation[index].content.toLowerCase();
+
+    if (content.includes("zoho")) {
+      return "zoho";
+    }
+
+    if (content.includes("walnut")) {
+      return "walnut";
     }
   }
 
@@ -467,12 +628,22 @@ function needsEntityClarification(message: string): boolean {
 function buildFallbackChart(
   userMessage: string,
   groupedResult?: AgentRequestContext["lastCountByField"],
+  salesBreakdown?: AgentRequestContext["lastSalesBreakdown"],
 ): ChartSpec | undefined {
-  if (!groupedResult || groupedResult.rows.length === 0) {
+  if (!hasChartIntent(userMessage)) {
     return undefined;
   }
 
-  if (!hasChartIntent(userMessage)) {
+  if (salesBreakdown && salesBreakdown.labels.length > 0) {
+    return {
+      type: inferChartType(userMessage),
+      title: salesBreakdown.title,
+      labels: salesBreakdown.labels,
+      values: salesBreakdown.values,
+    };
+  }
+
+  if (!groupedResult || groupedResult.rows.length === 0) {
     return undefined;
   }
 
