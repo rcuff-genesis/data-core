@@ -1,4 +1,5 @@
 import { answerDataQuestion } from "@/src/ai/chatService";
+import type { ToolCallLogEntry } from "@/src/ai/types";
 
 export const runtime = "nodejs";
 
@@ -6,6 +7,7 @@ interface ChatRequestBody {
   messages?: Array<{
     role?: "user" | "assistant";
     content?: string;
+    toolCallLog?: ToolCallLogEntry[];
   }>;
 }
 
@@ -13,7 +15,13 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as ChatRequestBody;
     const messages = (body.messages ?? []).filter(
-      (message): message is { role: "user" | "assistant"; content: string } =>
+      (
+        message,
+      ): message is {
+        role: "user" | "assistant";
+        content: string;
+        toolCallLog?: ToolCallLogEntry[];
+      } =>
         (message.role === "user" || message.role === "assistant") &&
         typeof message.content === "string",
     );

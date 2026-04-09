@@ -119,6 +119,7 @@ export function ChatWorkspace({
             messages: nextMessages.map((message) => ({
               role: message.role,
               content: message.content,
+              toolCallLog: message.toolCallLog,
             })),
           }),
         });
@@ -303,6 +304,9 @@ export function ChatWorkspace({
 
           <p className="mt-1.5 font-mono text-[10px] text-zinc-400">
             enter sends, shift+enter makes a newline, powered by llama3.1 and your Postgres ontology
+          </p>
+          <p className="mt-1 font-mono text-[10px] text-zinc-400">
+            learning commands: /help, /teach, /good, /bad, /tool, /learned, /forget
           </p>
         </div>
       </div>

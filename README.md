@@ -1,5 +1,9 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Data Core Docs
+
+- [Data Core AI SOP](./AI_ASSISTANT_SOP.md)
+
 ## Getting Started
 
 First, run the development server:

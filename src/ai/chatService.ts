@@ -6,12 +6,20 @@ import {
   createAgentExecutor,
   type AgentRequestContext,
 } from "./agentTools";
+import {
+  addLearningRule,
+  deactivateLearningRule,
+  getActiveLearningRules,
+  listLearningRules,
+  recordFeedback,
+} from "./learningStore";
 import { OntologyQueryService } from "../ontology/queryService";
 import type { ChartSpec, ToolCallLogEntry } from "./types";
 
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  toolCallLog?: ToolCallLogEntry[];
 }
 
 export interface ChatResponse {
@@ -39,6 +47,15 @@ export async function answerDataQuestion(
     throw new Error("A user message is required.");
   }
 
+  const commandResponse = await handleLearningCommand(
+    conversation,
+    latestUserMessage,
+  );
+
+  if (commandResponse) {
+    return commandResponse;
+  }
+
   const clarificationQuestion = buildClarificationQuestion(
     conversation,
     latestUserMessage.content,
@@ -55,8 +72,9 @@ export async function answerDataQuestion(
   const entityCounts = statusSummary.entityCounts
     .map((entry) => `${entry.entityType}: ${entry.count}`)
     .join(", ");
+  const learnedRules = await getActiveLearningRules();
 
-  const systemPrompt = buildSystemPrompt(entityCounts);
+  const systemPrompt = buildSystemPrompt(entityCounts, learnedRules);
   const ollamaMessages = [
     { role: "system" as const, content: systemPrompt },
     ...conversation.map((message) => ({
@@ -76,11 +94,25 @@ export async function answerDataQuestion(
     agentCtx.chart ??
     buildFallbackChart(latestUserMessage.content, agentCtx.lastCountByField);
 
+  if (/i don't have that data/i.test(answer)) {
+    return {
+      answer: `${answer}\n\nYou can help me learn with \`/teach ...\`, rate this with \`/good\` or \`/bad why...\`, or log a missing capability with \`/tool ...\`.`,
+      toolCallLog,
+      chart,
+    };
+  }
+
   return { answer, toolCallLog, chart };
 }
 
-function buildSystemPrompt(entityCounts: string): string {
+function buildSystemPrompt(
+  entityCounts: string,
+  learnedRules: Awaited<ReturnType<typeof getActiveLearningRules>>,
+): string {
   const today = new Date().toISOString().slice(0, 10);
+  const learnedRuleLines = learnedRules.map(
+    (rule) => `- [rule ${rule.id}] ${rule.ruleText}`,
+  );
 
   return [
     `You are Data Core AI. Today is ${today}.`,
@@ -112,7 +144,190 @@ function buildSystemPrompt(entityCounts: string): string {
     "19. If the user asks for rankings like 'top' or 'best' and the metric is unclear, ask what metric they want.",
     "20. If the user asks for closed leads, interpret that as terminal lead stages and be explicit about the filter you chose.",
     "21. Keep clarifying questions short, ask only one at a time, and keep answers short and direct.",
+    ...(learnedRuleLines.length
+      ? [
+          "",
+          "## Learned Workspace Instructions:",
+          "These were taught by the user. Follow them when they do not conflict with actual tool results or database truth.",
+          ...learnedRuleLines,
+        ]
+      : []),
   ].join("\n");
+}
+
+async function handleLearningCommand(
+  conversation: ChatMessage[],
+  latestUserMessage: ChatMessage,
+): Promise<ChatResponse | null> {
+  const content = latestUserMessage.content.trim();
+
+  if (!content.startsWith("/")) {
+    return null;
+  }
+
+  const parsed = parseSlashCommand(content);
+  const priorConversation = conversation.slice(0, -1);
+  const lastAssistantMessage = [...priorConversation]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  const lastUserMessage = [...priorConversation]
+    .reverse()
+    .find((message) => message.role === "user");
+  const conversationSnapshot = priorConversation.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+
+  switch (parsed.command) {
+    case "help":
+      return {
+        answer: [
+          "Slash commands:",
+          "/teach <instruction> - save a rule for future answers",
+          "/good [note] - mark the last assistant answer as helpful",
+          "/bad <note> - mark the last assistant answer as unhelpful",
+          "/tool <need> - log a missing capability or tool request",
+          "/learned - list active learned rules",
+          "/forget <id> - disable one learned rule",
+        ].join("\n"),
+        toolCallLog: [],
+      };
+
+    case "teach": {
+      if (!parsed.args) {
+        return {
+          answer: "Usage: /teach <instruction you want me to remember>",
+          toolCallLog: [],
+        };
+      }
+
+      const rule = await addLearningRule(parsed.args);
+      await recordFeedback({
+        feedbackType: "teach",
+        note: parsed.args,
+        userMessage: lastUserMessage?.content,
+        assistantMessage: lastAssistantMessage?.content,
+        conversation: conversationSnapshot,
+        toolCallLog: lastAssistantMessage?.toolCallLog,
+      });
+
+      return {
+        answer: `Saved learning rule #${rule.id}: ${rule.ruleText}`,
+        toolCallLog: [],
+      };
+    }
+
+    case "good": {
+      if (!lastAssistantMessage) {
+        return {
+          answer: "I need a previous assistant answer in this chat before I can record /good feedback.",
+          toolCallLog: [],
+        };
+      }
+
+      await recordFeedback({
+        feedbackType: "good",
+        note: parsed.args,
+        userMessage: lastUserMessage?.content,
+        assistantMessage: lastAssistantMessage.content,
+        conversation: conversationSnapshot,
+        toolCallLog: lastAssistantMessage.toolCallLog,
+      });
+
+      return {
+        answer: "Saved as positive feedback for the last assistant answer.",
+        toolCallLog: [],
+      };
+    }
+
+    case "bad": {
+      if (!lastAssistantMessage) {
+        return {
+          answer: "I need a previous assistant answer in this chat before I can record /bad feedback.",
+          toolCallLog: [],
+        };
+      }
+
+      await recordFeedback({
+        feedbackType: "bad",
+        note: parsed.args,
+        userMessage: lastUserMessage?.content,
+        assistantMessage: lastAssistantMessage.content,
+        conversation: conversationSnapshot,
+        toolCallLog: lastAssistantMessage.toolCallLog,
+      });
+
+      return {
+        answer: parsed.args
+          ? "Saved as negative feedback for the last assistant answer."
+          : "Saved as negative feedback. Add a reason next time like `/bad you should compare Walnut builds to Zoho orders by order number` to make it more useful.",
+        toolCallLog: [],
+      };
+    }
+
+    case "tool": {
+      if (!parsed.args) {
+        return {
+          answer: "Usage: /tool <capability or command you want added>",
+          toolCallLog: [],
+        };
+      }
+
+      await recordFeedback({
+        feedbackType: "tool_request",
+        note: parsed.args,
+        userMessage: lastUserMessage?.content,
+        assistantMessage: lastAssistantMessage?.content,
+        conversation: conversationSnapshot,
+        toolCallLog: lastAssistantMessage?.toolCallLog,
+      });
+
+      return {
+        answer: `Logged missing capability request: ${parsed.args}`,
+        toolCallLog: [],
+      };
+    }
+
+    case "learned": {
+      const rules = await listLearningRules();
+
+      return {
+        answer: rules.length
+          ? `Active learned rules:\n${rules
+              .map((rule) => `- #${rule.id}: ${rule.ruleText}`)
+              .join("\n")}`
+          : "There are no active learned rules yet.",
+        toolCallLog: [],
+      };
+    }
+
+    case "forget": {
+      const id = Number(parsed.args);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return {
+          answer: "Usage: /forget <rule id>",
+          toolCallLog: [],
+        };
+      }
+
+      const removed = await deactivateLearningRule(id);
+
+      return {
+        answer: removed
+          ? `Disabled learned rule #${id}.`
+          : `I couldn't find an active learned rule with id ${id}.`,
+        toolCallLog: [],
+      };
+    }
+
+    default:
+      return {
+        answer:
+          "Unknown slash command. Use `/help` to see the available learning commands.",
+        toolCallLog: [],
+      };
+  }
 }
 
 const ENTITY_PATTERNS: Array<{ key: string; pattern: RegExp }> = [
@@ -202,6 +417,17 @@ function buildClarificationQuestion(
 
 function normalizeMessage(message: string): string {
   return message.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function parseSlashCommand(input: string): { command: string; args: string } {
+  const trimmed = input.trim();
+  const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  const [command = "", ...rest] = withoutSlash.split(/\s+/);
+
+  return {
+    command: command.toLowerCase(),
+    args: rest.join(" ").trim(),
+  };
 }
 
 function extractEntities(message: string): Set<string> {
