@@ -121,7 +121,10 @@ async function handleStructuredQuestion(
 ): Promise<ChatResponse | null> {
   const normalized = normalizeMessage(latestUserMessage);
 
-  if (!looksLikeSalesBreakdownQuestion(normalized)) {
+  if (
+    !looksLikeSalesBreakdownQuestion(normalized) ||
+    looksLikeModelSpecificSalesQuestion(normalized)
+  ) {
     return null;
   }
 
@@ -222,6 +225,8 @@ function buildSystemPrompt(
     "12a. For sales-order breakdowns by year, year range, or source system, use get_sales_breakdown_by_source.",
     "12b. Do not use source-system breakdown tools to answer product-model questions like WC-10, WC-100, or WC-1000.",
     "12c. If the user asks about a specific model or spec and the metric is unclear, ask whether they want distinct sales orders, revenue amount, or units before answering.",
+    "12d. If a follow-up sales question says 'same', 'same for', or 'do the same' for a specific model, do not guess. Ask what metric and source to use unless that is crystal clear from the latest user message.",
+    "12e. If the user asks for a model chart and the available tool only breaks down by source system, ask a clarifying question instead of reusing the source-system chart.",
     "13. For Walnut inventory-health or shortage questions, use get_inventory_health_summary or list_low_stock_parts. If the user asks which parts are the issue, prefer list_low_stock_parts so you can name the parts and shortages.",
     "14. For Walnut forecasting, parts planning, or build-demand questions, use forecast_parts_for_active_builds.",
     "15. For one Walnut build's materials or shortages, use get_build_requirements.",
@@ -461,19 +466,48 @@ function buildClarificationQuestion(
   const recentSalesContext = hasRecentSalesContext(conversation.slice(0, -1));
   const recentSource = findRecentSourceMention(conversation.slice(0, -1));
   const modelCodes = extractModelCodes(normalized);
-
-  if (
+  const latestUserContext = findLatestUserSalesContext(conversation.slice(0, -1));
+  const followUpSameIntent = /\b(same|same for|do the same|that same)\b/.test(
+    normalized,
+  );
+  const mentionsSalesModel =
     modelCodes.length > 0 &&
-    (currentEntities.has("sales_order") || recentSalesContext || /\b(same|do the same)\b/.test(normalized))
-  ) {
-    const modelLabel = modelCodes.join(" vs ");
+    (currentEntities.has("sales_order") ||
+      recentSalesContext ||
+      followUpSameIntent ||
+      /\b(model|spec)\b/.test(normalized));
 
-    if (!/\b(amount|revenue|value|count|orders?|units?)\b/.test(normalized)) {
+  if (mentionsSalesModel) {
+    const modelLabel = modelCodes.join(" vs ");
+    const normalizedLatestUserContext = latestUserContext
+      ? normalizeMessage(latestUserContext)
+      : "";
+    const currentMetric = extractSalesMetric(normalized);
+    const priorMetric = extractSalesMetric(normalizedLatestUserContext);
+    const currentSource = extractSourceChoice(normalized);
+    const priorSource = extractSourceChoice(normalizedLatestUserContext) ?? recentSource;
+    const currentChartIntent = hasChartIntent(normalized);
+    const priorChartIntent =
+      normalizedLatestUserContext.length > 0 &&
+      hasChartIntent(normalizedLatestUserContext);
+
+    if (
+      !currentMetric ||
+      (followUpSameIntent && !/\b(amount|revenue|value|count|orders?|units?)\b/.test(normalized) && !priorMetric)
+    ) {
       return `For ${modelLabel}, do you want distinct sales orders, revenue amount, or units?`;
     }
 
-    if (!/\bzoho|walnut|both\b/.test(normalized) && !recentSource) {
+    if (!currentSource && !priorSource) {
       return `Should I use Zoho only, Walnut only, or both for ${modelLabel}?`;
+    }
+
+    if (
+      currentChartIntent &&
+      !/\b(amount|revenue|value|count|orders?)\b/.test(normalized) &&
+      !priorChartIntent
+    ) {
+      return `For the ${modelLabel} chart, do you want revenue amount or sales-order count?`;
     }
   }
 
@@ -557,6 +591,15 @@ function extractModelCodes(message: string): string[] {
   );
 }
 
+function looksLikeModelSpecificSalesQuestion(message: string): boolean {
+  return (
+    extractModelCodes(message).length > 0 &&
+    /\bsales\b|\bsales orders?\b|\brevenue\b|\bmodel\b|\bspec\b|\bamount\b|\bunits?\b|\borders?\b/.test(
+      message,
+    )
+  );
+}
+
 function looksLikeSalesBreakdownQuestion(message: string): boolean {
   return (
     /\bsales\b|\bsales orders?\b|\brevenue\b/.test(message) &&
@@ -600,6 +643,23 @@ function hasRecentSalesContext(conversation: ChatMessage[]): boolean {
   );
 }
 
+function findLatestUserSalesContext(conversation: ChatMessage[]): string | null {
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    const message = conversation[index];
+
+    if (
+      message.role === "user" &&
+      /\bsales\b|\bsales orders?\b|\brevenue\b|\bwc[- ]?\d{1,4}\b|\bmodel\b|\bspec\b/i.test(
+        message.content,
+      )
+    ) {
+      return message.content;
+    }
+  }
+
+  return null;
+}
+
 function findRecentSourceMention(conversation: ChatMessage[]): string | null {
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
     const content = conversation[index].content.toLowerCase();
@@ -611,6 +671,40 @@ function findRecentSourceMention(conversation: ChatMessage[]): string | null {
     if (content.includes("walnut")) {
       return "walnut";
     }
+  }
+
+  return null;
+}
+
+function extractSalesMetric(
+  message: string,
+): "amount" | "count" | "units" | null {
+  if (/\b(amount|revenue|value|total)\b/.test(message)) {
+    return "amount";
+  }
+
+  if (/\b(units?|quantity)\b/.test(message)) {
+    return "units";
+  }
+
+  if (/\b(count|counts|number of orders|orders?)\b/.test(message)) {
+    return "count";
+  }
+
+  return null;
+}
+
+function extractSourceChoice(message: string): "zoho" | "walnut" | "both" | null {
+  if (/\bboth\b/.test(message)) {
+    return "both";
+  }
+
+  if (/\bzoho\b/.test(message)) {
+    return "zoho";
+  }
+
+  if (/\bwalnut\b/.test(message)) {
+    return "walnut";
   }
 
   return null;
