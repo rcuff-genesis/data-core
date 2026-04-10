@@ -6,7 +6,9 @@ import {
 export const runtime = "nodejs";
 
 export async function GET() {
-  const status = await getWalnutConnectionStatus();
+  const status = await getWalnutConnectionStatus({
+    includeDiagnostics: true,
+  });
 
   return Response.json({
     ok: true,

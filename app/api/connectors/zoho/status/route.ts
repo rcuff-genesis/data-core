@@ -3,7 +3,7 @@ import { getZohoConnectionStatus } from "@/src/connectors/zoho";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const status = await getZohoConnectionStatus();
+  const status = await getZohoConnectionStatus({ includeDiagnostics: true });
 
   if (!status.connected) {
     return Response.json({

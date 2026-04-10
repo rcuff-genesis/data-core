@@ -93,6 +93,8 @@ export async function runWalnutSync(
       result.relationsPersisted = persistence.relationsPersisted;
     }
 
+    releaseSyncResultPayload(result);
+
     return {
       plan,
       result,
@@ -175,4 +177,8 @@ async function deriveWalnutCrossSystemRelations(
       }),
     );
   });
+}
+
+function releaseSyncResultPayload(result: SyncResult): void {
+  result.entities = [];
 }

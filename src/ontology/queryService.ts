@@ -27,8 +27,10 @@ type SyncRunRow = {
   completed_at: string | null;
   records_fetched: number | null;
   records_mapped: number | null;
+  source_records_persisted: number | null;
   entities_persisted: number | null;
   relations_persisted: number | null;
+  warnings: string[] | null;
   error_message: string | null;
 };
 
@@ -97,10 +99,28 @@ export interface OntologyStatusSummary {
     completedAt: string | null;
     recordsFetched: number | null;
     recordsMapped: number | null;
+    sourceRecordsPersisted: number | null;
     entitiesPersisted: number | null;
     relationsPersisted: number | null;
+    warnings: string[];
     errorMessage: string | null;
   }>;
+}
+
+export interface SyncRunSummary {
+  id: number;
+  connector: string;
+  mode: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  recordsFetched: number | null;
+  recordsMapped: number | null;
+  sourceRecordsPersisted: number | null;
+  entitiesPersisted: number | null;
+  relationsPersisted: number | null;
+  warnings: string[];
+  errorMessage: string | null;
 }
 
 export interface KnowledgeSearchResult {
@@ -470,13 +490,15 @@ export class OntologyQueryService {
               connector,
               mode,
               status,
-              started_at,
-              completed_at,
-              records_fetched,
-              records_mapped,
-              entities_persisted,
-              relations_persisted,
-              error_message
+            started_at,
+            completed_at,
+            records_fetched,
+            records_mapped,
+            source_records_persisted,
+            entities_persisted,
+            relations_persisted,
+            warnings,
+            error_message
             FROM sync_runs
             ORDER BY started_at DESC
             LIMIT 10
@@ -502,11 +524,84 @@ export class OntologyQueryService {
         completedAt: row.completed_at,
         recordsFetched: row.records_fetched,
         recordsMapped: row.records_mapped,
+        sourceRecordsPersisted: row.source_records_persisted,
         entitiesPersisted: row.entities_persisted,
         relationsPersisted: row.relations_persisted,
+        warnings: row.warnings ?? [],
         errorMessage: row.error_message,
       })),
     };
+  }
+
+  async getRecentSyncRuns(options?: {
+    connector?: string;
+    limit?: number;
+  }): Promise<SyncRunSummary[]> {
+    const connector = options?.connector?.trim();
+    const limit = Math.max(1, Math.min(options?.limit ?? 10, 50));
+
+    const result = connector
+      ? await query<SyncRunRow>(
+          `
+            SELECT
+              id,
+              connector,
+              mode,
+              status,
+              started_at,
+              completed_at,
+              records_fetched,
+              records_mapped,
+              source_records_persisted,
+              entities_persisted,
+              relations_persisted,
+              warnings,
+              error_message
+            FROM sync_runs
+            WHERE connector = $1
+            ORDER BY started_at DESC
+            LIMIT $2
+          `,
+          [connector, limit],
+        )
+      : await query<SyncRunRow>(
+          `
+            SELECT
+              id,
+              connector,
+              mode,
+              status,
+              started_at,
+              completed_at,
+              records_fetched,
+              records_mapped,
+              source_records_persisted,
+              entities_persisted,
+              relations_persisted,
+              warnings,
+              error_message
+            FROM sync_runs
+            ORDER BY started_at DESC
+            LIMIT $1
+          `,
+          [limit],
+        );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      connector: row.connector,
+      mode: row.mode,
+      status: row.status,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      recordsFetched: row.records_fetched,
+      recordsMapped: row.records_mapped,
+      sourceRecordsPersisted: row.source_records_persisted,
+      entitiesPersisted: row.entities_persisted,
+      relationsPersisted: row.relations_persisted,
+      warnings: row.warnings ?? [],
+      errorMessage: row.error_message,
+    }));
   }
 }
 

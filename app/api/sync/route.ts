@@ -1,7 +1,34 @@
 import { runWalnutSync } from "@/src/connectors/walnut";
 import { runZohoSync } from "@/src/connectors/zoho";
+import { OntologyQueryService } from "@/src/ontology/queryService";
 
 export const runtime = "nodejs";
+const ontologyQueryService = new OntologyQueryService();
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const connector = searchParams.get("connector")?.trim() || undefined;
+    const limit = Number(searchParams.get("limit") ?? "8");
+    const syncRuns = await ontologyQueryService.getRecentSyncRuns({
+      connector,
+      limit: Number.isFinite(limit) ? limit : 8,
+    });
+
+    return Response.json({
+      ok: true,
+      syncRuns,
+    });
+  } catch (error) {
+    return Response.json(
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : "Failed to load sync history.",
+      },
+      { status: 500 },
+    );
+  }
+}
 
 export async function POST(request: Request) {
   try {

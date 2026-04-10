@@ -19,17 +19,35 @@ export interface ConnectorStatus {
   details?: string;
 }
 
+const CONNECTOR_STATUS_CACHE_TTL_MS = 30_000;
+let cachedStatuses:
+  | {
+      expiresAt: number;
+      statuses: ConnectorStatus[];
+    }
+  | null = null;
+
 export async function getConnectorStatuses(): Promise<ConnectorStatus[]> {
+  if (cachedStatuses && cachedStatuses.expiresAt > Date.now()) {
+    return cachedStatuses.statuses;
+  }
+
   const [zohoStatus, walnutStatus] = await Promise.all([
     getZohoConnectorStatus(),
     getWalnutConnectorStatus(),
   ]);
 
-  return [zohoStatus, walnutStatus];
+  const statuses = [zohoStatus, walnutStatus];
+  cachedStatuses = {
+    expiresAt: Date.now() + CONNECTOR_STATUS_CACHE_TTL_MS,
+    statuses,
+  };
+
+  return statuses;
 }
 
 export async function getZohoConnectorStatus(): Promise<ConnectorStatus> {
-  const connection = await getZohoConnectionStatus();
+  const connection = await getZohoConnectionStatus({ includeDiagnostics: false });
   const zohoCoverage = getZohoCoverageSummary();
 
   if (connection.connected) {
@@ -78,7 +96,9 @@ export async function getZohoConnectorStatus(): Promise<ConnectorStatus> {
 }
 
 export async function getWalnutConnectorStatus(): Promise<ConnectorStatus> {
-  const connection = await getWalnutConnectionStatus();
+  const connection = await getWalnutConnectionStatus({
+    includeDiagnostics: false,
+  });
   const coverage = getWalnutCoverageSummary();
 
   if (!connection.configured) {

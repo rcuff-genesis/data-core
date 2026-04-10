@@ -45,7 +45,9 @@ type ChatMessage = {
 
 type ChatApiResponse = {
   ok: boolean;
+  sessionId?: string;
   error?: string;
+  messages?: ChatMessage[];
   response?: {
     answer: string;
     toolCallLog: ToolCallLogEntry[];
@@ -67,6 +69,7 @@ const CHART_COLORS = [
   "#0f766e",
   "#a16207",
 ];
+const CHAT_SESSION_STORAGE_KEY = "data-core-chat-session-id";
 
 export function ChatWorkspace({
   connectors,
@@ -77,6 +80,8 @@ export function ChatWorkspace({
   const [draft, setDraft] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [hasRestoredHistory, setHasRestoredHistory] = useState(false);
   const [isPending, startTransition] = useTransition();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -84,10 +89,61 @@ export function ChatWorkspace({
   const connectedCount = connectors.filter(
     (connector) => connector.state === "connected",
   ).length;
+  const isLoadingHistory = sessionId !== null && !hasRestoredHistory;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isPending]);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      const storedSessionId = getStoredChatSessionId();
+
+      if (storedSessionId) {
+        setSessionId(storedSessionId);
+        return;
+      }
+
+      setHasRestoredHistory(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+
+    void fetch(`/api/chat?sessionId=${encodeURIComponent(sessionId)}`)
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as ChatApiResponse;
+
+        if (!response.ok || !payload.ok) {
+          return;
+        }
+
+        setMessages(
+          (payload.messages ?? []).map((message) => ({
+            ...message,
+            id: String(message.id ?? crypto.randomUUID()),
+          })),
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => setHasRestoredHistory(true));
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (sessionId) {
+      window.localStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
+      return;
+    }
+
+    window.localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
+  }, [sessionId]);
 
   function handleStarterPrompt(prompt: string) {
     setDraft(prompt);
@@ -116,11 +172,8 @@ export function ChatWorkspace({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            messages: nextMessages.map((message) => ({
-              role: message.role,
-              content: message.content,
-              toolCallLog: message.toolCallLog,
-            })),
+            sessionId,
+            message: content,
           }),
         });
 
@@ -129,6 +182,10 @@ export function ChatWorkspace({
         if (!response.ok || !payload.ok || !payload.response) {
           setError(payload.error ?? "The assistant could not answer right now.");
           return;
+        }
+
+        if (payload.sessionId) {
+          setSessionId(payload.sessionId);
         }
 
         setMessages((currentMessages) => [
@@ -145,6 +202,14 @@ export function ChatWorkspace({
         setError("Could not reach the local Ollama server.");
       }
     });
+  }
+
+  function handleNewChat() {
+    setMessages([]);
+    setDraft("");
+    setError(null);
+    setSessionId(null);
+    setHasRestoredHistory(true);
   }
 
   return (
@@ -165,6 +230,13 @@ export function ChatWorkspace({
           </span>
           <button
             type="button"
+            onClick={handleNewChat}
+            className="rounded border border-zinc-200 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-zinc-500 transition hover:border-zinc-400 hover:text-black"
+          >
+            new chat
+          </button>
+          <button
+            type="button"
             onClick={() => setDrawerOpen(true)}
             className="flex h-8 w-8 items-center justify-center rounded border border-zinc-200 text-zinc-500 transition hover:border-zinc-400 hover:text-black"
             aria-label="Open connections"
@@ -175,7 +247,15 @@ export function ChatWorkspace({
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
+        {isLoadingHistory ? (
+          <div className="flex h-full items-center justify-center px-4">
+            <p className="font-mono text-xs text-zinc-400">
+              Restoring your saved chat session...
+            </p>
+          </div>
+        ) : null}
+
+        {!isLoadingHistory && messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-6 px-4">
             <p className="font-mono text-xs text-zinc-400">
               Ask anything about your connected data.
@@ -458,8 +538,8 @@ function DataChart({ spec }: { spec: ChartSpec }) {
         </span>
       </div>
 
-      <div className="h-64 w-full rounded border border-zinc-200 bg-white px-2 py-3">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-64 w-full min-w-0 rounded border border-zinc-200 bg-white px-2 py-3">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
           {spec.type === "bar" ? (
             <BarChart
               data={data}
@@ -601,4 +681,14 @@ function CloseIcon() {
       />
     </svg>
   );
+}
+
+function getStoredChatSessionId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const value = window.localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+
+  return value && value.trim() ? value : null;
 }

@@ -22,6 +22,10 @@ export interface ZohoConnectionStatus {
   authUrl?: string;
 }
 
+interface ZohoStatusOptions {
+  includeDiagnostics?: boolean;
+}
+
 export interface ZohoSyncResponse {
   plan: SyncJobSummary;
   result: SyncResult;
@@ -75,7 +79,10 @@ export function getZohoAuthUrl(): string | null {
   return `https://accounts.zoho.com/oauth/v2/auth?${params.toString()}`;
 }
 
-export async function getZohoConnectionStatus(): Promise<ZohoConnectionStatus> {
+export async function getZohoConnectionStatus(
+  options: ZohoStatusOptions = {},
+): Promise<ZohoConnectionStatus> {
+  const includeDiagnostics = options.includeDiagnostics ?? true;
   const tokenStore = createZohoTokenStore();
   const tokens = await getValidZohoTokens({
     store: tokenStore,
@@ -91,6 +98,17 @@ export async function getZohoConnectionStatus(): Promise<ZohoConnectionStatus> {
 
   const client = createZohoClient();
   const reachable = await client.verifyConnection();
+
+  if (!includeDiagnostics) {
+    return {
+      connected: true,
+      reachable,
+      apiDomain: tokens.apiDomain,
+      expiresAt: tokens.expiresAt,
+      hasRefreshToken: Boolean(tokens.refreshToken),
+    };
+  }
+
   const availableModules = reachable
     ? await client.fetchAvailableModules().catch(() => [])
     : [];
@@ -167,6 +185,8 @@ export async function runZohoSync(mode: SyncMode): Promise<ZohoSyncResponse> {
       result.relationsPersisted = persistence.relationsPersisted;
     }
 
+    releaseSyncResultPayload(result);
+
     return {
       plan,
       result,
@@ -188,4 +208,8 @@ export async function getZohoSamples(
   modules?: string[],
 ): Promise<ZohoRawSampleResult[]> {
   return getZohoRawSamples(modules);
+}
+
+function releaseSyncResultPayload(result: SyncResult): void {
+  result.entities = [];
 }

@@ -25,6 +25,10 @@ export interface WalnutConnectionStatus {
   error?: string;
 }
 
+interface WalnutStatusOptions {
+  includeDiagnostics?: boolean;
+}
+
 export function isWalnutConfigured(): boolean {
   return Boolean(
     hasDiscreteWalnutConfig() || process.env.WALNUT_DATABASE_URL,
@@ -80,7 +84,9 @@ export async function queryWalnut<T extends QueryResultRow = QueryResultRow>(
   return getWalnutPool().query<T>(text, values);
 }
 
-export async function getWalnutConnectionStatus(): Promise<WalnutConnectionStatus> {
+export async function getWalnutConnectionStatus(
+  options: WalnutStatusOptions = {},
+): Promise<WalnutConnectionStatus> {
   if (!isWalnutConfigured()) {
     return {
       configured: false,
@@ -91,30 +97,40 @@ export async function getWalnutConnectionStatus(): Promise<WalnutConnectionStatu
   }
 
   const schema = process.env.WALNUT_DB_SCHEMA ?? "public";
+  const includeDiagnostics = options.includeDiagnostics ?? true;
 
   try {
-    const [metadataResult, tablesResult] = await Promise.all([
-      queryWalnut<WalnutMetadataRow>(
-        `
-          SELECT
-            current_database() AS database_name,
-            current_schema() AS schema_name,
-            version() AS version
-        `,
-      ),
-      queryWalnut<WalnutTableRow>(
-        `
-          SELECT table_name
-          FROM information_schema.tables
-          WHERE table_schema = $1
-            AND table_type = 'BASE TABLE'
-          ORDER BY table_name ASC
-        `,
-        [schema],
-      ),
-    ]);
+    const metadataResult = await queryWalnut<WalnutMetadataRow>(
+      `
+        SELECT
+          current_database() AS database_name,
+          current_schema() AS schema_name,
+          version() AS version
+      `,
+    );
 
     const metadata = metadataResult.rows[0];
+
+    if (!includeDiagnostics) {
+      return {
+        configured: true,
+        reachable: true,
+        database: metadata?.database_name,
+        schema: metadata?.schema_name ?? schema,
+        version: metadata?.version,
+      };
+    }
+
+    const tablesResult = await queryWalnut<WalnutTableRow>(
+      `
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = $1
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_name ASC
+      `,
+      [schema],
+    );
 
     return {
       configured: true,
